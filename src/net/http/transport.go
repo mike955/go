@@ -35,11 +35,7 @@ import (
 	"golang.org/x/net/http/httpproxy"
 )
 
-// DefaultTransport is the default implementation of Transport and is
-// used by DefaultClient. It establishes network connections as needed
-// and caches them for reuse by subsequent calls. It uses HTTP proxies
-// as directed by the $HTTP_PROXY and $NO_PROXY (or $http_proxy and
-// $no_proxy) environment variables.
+// 默认 transport，最大连接数 100，长连接空闲时间 90 秒，默认 transport 会缓存和重用已经建立的连接，
 var DefaultTransport RoundTripper = &Transport{
 	Proxy: ProxyFromEnvironment,
 	DialContext: (&net.Dialer{
@@ -53,50 +49,14 @@ var DefaultTransport RoundTripper = &Transport{
 	ExpectContinueTimeout: 1 * time.Second,
 }
 
-// DefaultMaxIdleConnsPerHost is the default value of Transport's
-// MaxIdleConnsPerHost.
-const DefaultMaxIdleConnsPerHost = 2
+const DefaultMaxIdleConnsPerHost = 2 // 默认每个地址最大连接数
 
-// Transport is an implementation of RoundTripper that supports HTTP,
-// HTTPS, and HTTP proxies (for either HTTP or HTTPS with CONNECT).
-//
-// By default, Transport caches connections for future re-use.
-// This may leave many open connections when accessing many hosts.
-// This behavior can be managed using Transport's CloseIdleConnections method
-// and the MaxIdleConnsPerHost and DisableKeepAlives fields.
-//
-// Transports should be reused instead of created as needed.
-// Transports are safe for concurrent use by multiple goroutines.
-//
-// A Transport is a low-level primitive for making HTTP and HTTPS requests.
-// For high-level functionality, such as cookies and redirects, see Client.
-//
-// Transport uses HTTP/1.1 for HTTP URLs and either HTTP/1.1 or HTTP/2
-// for HTTPS URLs, depending on whether the server supports HTTP/2,
-// and how the Transport is configured. The DefaultTransport supports HTTP/2.
-// To explicitly enable HTTP/2 on a transport, use golang.org/x/net/http2
-// and call ConfigureTransport. See the package docs for more about HTTP/2.
-//
-// Responses with status codes in the 1xx range are either handled
-// automatically (100 expect-continue) or ignored. The one
-// exception is HTTP status code 101 (Switching Protocols), which is
-// considered a terminal status and returned by RoundTrip. To see the
-// ignored 1xx responses, use the httptrace trace package's
-// ClientTrace.Got1xxResponse.
-//
-// Transport only retries a request upon encountering a network error
-// if the request is idempotent and either has no body or has its
-// Request.GetBody defined. HTTP requests are considered idempotent if
-// they have HTTP methods GET, HEAD, OPTIONS, or TRACE; or if their
-// Header map contains an "Idempotency-Key" or "X-Idempotency-Key"
-// entry. If the idempotency key value is a zero-length slice, the
-// request is treated as idempotent but the header is not sent on the
-// wire.
+// Transport 支持 http、https 以及 http proxy，支持连接池，
 type Transport struct {
 	idleMu       sync.Mutex
-	closeIdle    bool                                // user has requested to close all idle conns
-	idleConn     map[connectMethodKey][]*persistConn // most recently used at end
-	idleConnWait map[connectMethodKey]wantConnQueue  // waiting getConns
+	closeIdle    bool                                // 是否关闭连接
+	idleConn     map[connectMethodKey][]*persistConn // 最近使用的连接
+	idleConnWait map[connectMethodKey]wantConnQueue  // 等待获取连接的队列
 	idleLRU      connLRU
 
 	reqMu       sync.Mutex
@@ -109,121 +69,49 @@ type Transport struct {
 	connsPerHost     map[connectMethodKey]int
 	connsPerHostWait map[connectMethodKey]wantConnQueue // waiting getConns
 
-	// Proxy specifies a function to return a proxy for a given
-	// Request. If the function returns a non-nil error, the
-	// request is aborted with the provided error.
-	//
-	// The proxy type is determined by the URL scheme. "http",
-	// "https", and "socks5" are supported. If the scheme is empty,
-	// "http" is assumed.
-	//
-	// If Proxy is nil or returns a nil *URL, no proxy is used.
-	Proxy func(*Request) (*url.URL, error)
+	Proxy func(*Request) (*url.URL, error) // 返回一个 proxy
 
-	// DialContext specifies the dial function for creating unencrypted TCP connections.
-	// If DialContext is nil (and the deprecated Dial below is also nil),
-	// then the transport dials using package net.
-	//
-	// DialContext runs concurrently with calls to RoundTrip.
-	// A RoundTrip call that initiates a dial may end up using
-	// a connection dialed previously when the earlier connection
-	// becomes idle before the later DialContext completes.
+	// 创建连接，dialContxt 为 nil 时，使用 net.Dail 拨号
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 
-	// Dial specifies the dial function for creating unencrypted TCP connections.
-	//
-	// Dial runs concurrently with calls to RoundTrip.
-	// A RoundTrip call that initiates a dial may end up using
-	// a connection dialed previously when the earlier connection
-	// becomes idle before the later Dial completes.
-	//
-	// Deprecated: Use DialContext instead, which allows the transport
-	// to cancel dials as soon as they are no longer needed.
-	// If both are set, DialContext takes priority.
+	// 已抛弃，不建议使用
 	Dial func(network, addr string) (net.Conn, error)
 
-	// DialTLSContext specifies an optional dial function for creating
-	// TLS connections for non-proxied HTTPS requests.
-	//
-	// If DialTLSContext is nil (and the deprecated DialTLS below is also nil),
-	// DialContext and TLSClientConfig are used.
-	//
-	// If DialTLSContext is set, the Dial and DialContext hooks are not used for HTTPS
-	// requests and the TLSClientConfig and TLSHandshakeTimeout
-	// are ignored. The returned net.Conn is assumed to already be
-	// past the TLS handshake.
+	// 创建 TLS 连接
 	DialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error)
 
-	// DialTLS specifies an optional dial function for creating
-	// TLS connections for non-proxied HTTPS requests.
-	//
-	// Deprecated: Use DialTLSContext instead, which allows the transport
-	// to cancel dials as soon as they are no longer needed.
-	// If both are set, DialTLSContext takes priority.
+	// 已抛弃，不建议使用
 	DialTLS func(network, addr string) (net.Conn, error)
 
-	// TLSClientConfig specifies the TLS configuration to use with
-	// tls.Client.
-	// If nil, the default configuration is used.
-	// If non-nil, HTTP/2 support may not be enabled by default.
+	// TSL 连接配置
 	TLSClientConfig *tls.Config
 
-	// TLSHandshakeTimeout specifies the maximum amount of time waiting to
-	// wait for a TLS handshake. Zero means no timeout.
+	// TLS 握手超时时间
 	TLSHandshakeTimeout time.Duration
 
-	// DisableKeepAlives, if true, disables HTTP keep-alives and
-	// will only use the connection to the server for a single
-	// HTTP request.
-	//
-	// This is unrelated to the similarly named TCP keep-alives.
+	// 是否关闭长连接
 	DisableKeepAlives bool
 
-	// DisableCompression, if true, prevents the Transport from
-	// requesting compression with an "Accept-Encoding: gzip"
-	// request header when the Request contains no existing
-	// Accept-Encoding value. If the Transport requests gzip on
-	// its own and gets a gzipped response, it's transparently
-	// decoded in the Response.Body. However, if the user
-	// explicitly requested gzip it is not automatically
-	// uncompressed.
+	// 是否压缩，设置为 true 将阻止 transport 压缩非 Accept-Encoding 设置定的类型
 	DisableCompression bool
 
-	// MaxIdleConns controls the maximum number of idle (keep-alive)
-	// connections across all hosts. Zero means no limit.
+	// 最大 idle 连接数
 	MaxIdleConns int
 
-	// MaxIdleConnsPerHost, if non-zero, controls the maximum idle
-	// (keep-alive) connections to keep per-host. If zero,
-	// DefaultMaxIdleConnsPerHost is used.
+	// 与每个 host 保持的最大空闲连接数
 	MaxIdleConnsPerHost int
 
-	// MaxConnsPerHost optionally limits the total number of
-	// connections per host, including connections in the dialing,
-	// active, and idle states. On limit violation, dials will block.
-	//
-	// Zero means no limit.
+	// 与每个主机保持的最大连接数，保持连接中、激活、idle 状态
 	MaxConnsPerHost int
 
-	// IdleConnTimeout is the maximum amount of time an idle
-	// (keep-alive) connection will remain idle before closing
-	// itself.
-	// Zero means no limit.
+	// 空闲连接关闭时间
 	IdleConnTimeout time.Duration
 
-	// ResponseHeaderTimeout, if non-zero, specifies the amount of
-	// time to wait for a server's response headers after fully
-	// writing the request (including its body, if any). This
-	// time does not include the time to read the response body.
+	// 等待响应头超时时间
 	ResponseHeaderTimeout time.Duration
 
-	// ExpectContinueTimeout, if non-zero, specifies the amount of
-	// time to wait for a server's first response headers after fully
-	// writing the request headers if the request has an
-	// "Expect: 100-continue" header. Zero means no timeout and
-	// causes the body to be sent immediately, without
-	// waiting for the server to approve.
-	// This time does not include the time to send the request header.
+	// 收到响应头包含 Expect: 100-continue 时，等待下一个响应头的超时时间
+	// Expect: 100-continue 通常为当服务端打算响应一个体积很大的消息时，向客户端发送的一个临时回复
 	ExpectContinueTimeout time.Duration
 
 	// TLSNextProto specifies how the Transport switches to an
@@ -238,35 +126,19 @@ type Transport struct {
 	// automatically.
 	TLSNextProto map[string]func(authority string, c *tls.Conn) RoundTripper
 
-	// ProxyConnectHeader optionally specifies headers to send to
-	// proxies during CONNECT requests.
-	// To set the header dynamically, see GetProxyConnectHeader.
+	// 知道在连接期间发送到代理的标头
 	ProxyConnectHeader Header
 
-	// GetProxyConnectHeader optionally specifies a func to return
-	// headers to send to proxyURL during a CONNECT request to the
-	// ip:port target.
-	// If it returns an error, the Transport's RoundTrip fails with
-	// that error. It can return (nil, nil) to not add headers.
-	// If GetProxyConnectHeader is non-nil, ProxyConnectHeader is
-	// ignored.
+	// 设置连接期间发送到代理的头信息
 	GetProxyConnectHeader func(ctx context.Context, proxyURL *url.URL, target string) (Header, error)
 
-	// MaxResponseHeaderBytes specifies a limit on how many
-	// response bytes are allowed in the server's response
-	// header.
-	//
-	// Zero means to use a default limit.
+	// 最大响应头
 	MaxResponseHeaderBytes int64
 
-	// WriteBufferSize specifies the size of the write buffer used
-	// when writing to the transport.
-	// If zero, a default (currently 4KB) is used.
+	// 最大写缓冲大小，默认为 4KB.
 	WriteBufferSize int
 
-	// ReadBufferSize specifies the size of the read buffer used
-	// when reading from the transport.
-	// If zero, a default (currently 4KB) is used.
+	// 最大读缓冲大小，默认为 4KB.
 	ReadBufferSize int
 
 	// nextProtoOnce guards initialization of TLSNextProto and
@@ -275,11 +147,7 @@ type Transport struct {
 	h2transport        h2Transport // non-nil if http2 wired up
 	tlsNextProtoWasNil bool        // whether TLSNextProto was nil when the Once fired
 
-	// ForceAttemptHTTP2 controls whether HTTP/2 is enabled when a non-zero
-	// Dial, DialTLS, or DialContext func or TLSClientConfig is provided.
-	// By default, use of any those fields conservatively disables HTTP/2.
-	// To use a custom dialer or TLS config and still attempt HTTP/2
-	// upgrades, set this to true.
+	// 是否强制参数 http2 连接
 	ForceAttemptHTTP2 bool
 }
 
@@ -535,8 +403,8 @@ func (t *Transport) roundTrip(req *Request) (*Response, error) {
 	cancelKey := cancelKey{origReq}
 	req = setupRewindBody(req)
 
-	if altRT := t.alternateRoundTripper(req); altRT != nil {
-		if resp, err := altRT.RoundTrip(req); err != ErrSkipAltProtocol {
+	if altRT := t.alternateRoundTripper(req); altRT != nil { // 判断当前请求是否注册有特定的 roundTrip
+		if resp, err := altRT.RoundTrip(req); err != ErrSkipAltProtocol { // 调用特定 roundTrip 的 RoundTrip 方法
 			return resp, err
 		}
 		var err error
@@ -560,13 +428,13 @@ func (t *Transport) roundTrip(req *Request) (*Response, error) {
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-ctx.Done(): // 每次请求浅判断是否超时
 			req.closeBody()
 			return nil, ctx.Err()
 		default:
 		}
 
-		// treq gets modified by roundTrip, so we need to recreate for each retry.
+		// 由于 roundTrip 会修改 treq，因此每次请求需要重新定义
 		treq := &transportRequest{Request: req, trace: trace, cancelKey: cancelKey}
 		cm, err := t.connectMethodForRequest(treq)
 		if err != nil {
@@ -574,11 +442,7 @@ func (t *Transport) roundTrip(req *Request) (*Response, error) {
 			return nil, err
 		}
 
-		// Get the cached or newly-created connection to either the
-		// host (for http or https), the http proxy, or the http proxy
-		// pre-CONNECTed to https server. In any case, we'll be ready
-		// to send it requests.
-		pconn, err := t.getConn(treq, cm)
+		pconn, err := t.getConn(treq, cm) // 根据请求获取连接
 		if err != nil {
 			t.setReqCanceler(cancelKey, nil)
 			req.closeBody()
@@ -586,12 +450,12 @@ func (t *Transport) roundTrip(req *Request) (*Response, error) {
 		}
 
 		var resp *Response
-		if pconn.alt != nil {
+		if pconn.alt != nil { // 如果连接有特定的 RoundTrip, 使用特定的 RoundTrip
 			// HTTP/2 path.
 			t.setReqCanceler(cancelKey, nil) // not cancelable with CancelRequest
 			resp, err = pconn.alt.RoundTrip(req)
 		} else {
-			resp, err = pconn.roundTrip(treq)
+			resp, err = pconn.roundTrip(treq) // 发送请求
 		}
 		if err == nil {
 			resp.Request = origReq
@@ -1321,10 +1185,9 @@ func (t *Transport) customDialTLS(ctx context.Context, network, addr string) (co
 	return
 }
 
-// getConn dials and creates a new persistConn to the target as
-// specified in the connectMethod. This includes doing a proxy CONNECT
-// and/or setting up TLS.  If this doesn't return an error, the persistConn
-// is ready to write requests to.
+// 针对目标地址创建一个连接
+// 	- 首先从空闲池获取
+//	- 空闲池没有创建连接
 func (t *Transport) getConn(treq *transportRequest, cm connectMethod) (pc *persistConn, err error) {
 	req := treq.Request
 	trace := treq.trace

@@ -26,120 +26,21 @@ import (
 	"time"
 )
 
-// A Client is an HTTP client. Its zero value (DefaultClient) is a
-// usable client that uses DefaultTransport.
-//
-// The Client's Transport typically has internal state (cached TCP
-// connections), so Clients should be reused instead of created as
-// needed. Clients are safe for concurrent use by multiple goroutines.
-//
-// A Client is higher-level than a RoundTripper (such as Transport)
-// and additionally handles HTTP details such as cookies and
-// redirects.
-//
-// When following redirects, the Client will forward all headers set on the
-// initial Request except:
-//
-// • when forwarding sensitive headers like "Authorization",
-// "WWW-Authenticate", and "Cookie" to untrusted targets.
-// These headers will be ignored when following a redirect to a domain
-// that is not a subdomain match or exact match of the initial domain.
-// For example, a redirect from "foo.com" to either "foo.com" or "sub.foo.com"
-// will forward the sensitive headers, but a redirect to "bar.com" will not.
-//
-// • when forwarding the "Cookie" header with a non-nil cookie Jar.
-// Since each redirect may mutate the state of the cookie jar,
-// a redirect may possibly alter a cookie set in the initial request.
-// When forwarding the "Cookie" header, any mutated cookies will be omitted,
-// with the expectation that the Jar will insert those mutated cookies
-// with the updated values (assuming the origin matches).
-// If Jar is nil, the initial cookies are forwarded without change.
-//
-type Client struct {
-	// Transport specifies the mechanism by which individual
-	// HTTP requests are made.
-	// If nil, DefaultTransport is used.
-	Transport RoundTripper
+type Client struct { // http client 结构体，默认使用 DefaultClient 对象
+	Transport RoundTripper // 发送 http 请求的实体，处理 http 请求相关细节，默认使用 DefaultTransport
 
-	// CheckRedirect specifies the policy for handling redirects.
-	// If CheckRedirect is not nil, the client calls it before
-	// following an HTTP redirect. The arguments req and via are
-	// the upcoming request and the requests made already, oldest
-	// first. If CheckRedirect returns an error, the Client's Get
-	// method returns both the previous Response (with its Body
-	// closed) and CheckRedirect's error (wrapped in a url.Error)
-	// instead of issuing the Request req.
-	// As a special case, if CheckRedirect returns ErrUseLastResponse,
-	// then the most recent response is returned with its body
-	// unclosed, along with a nil error.
-	//
-	// If CheckRedirect is nil, the Client uses its default policy,
-	// which is to stop after 10 consecutive requests.
-	CheckRedirect func(req *Request, via []*Request) error
+	CheckRedirect func(req *Request, via []*Request) error // 处理重定向，via 表示已经发出去的请求，req 表示即将到来的请求，checkredirect 为 nil，则每次请求默认重试 10 次
 
-	// Jar specifies the cookie jar.
-	//
-	// The Jar is used to insert relevant cookies into every
-	// outbound Request and is updated with the cookie values
-	// of every inbound Response. The Jar is consulted for every
-	// redirect that the Client follows.
-	//
-	// If Jar is nil, cookies are only sent if they are explicitly
-	// set on the Request.
-	Jar CookieJar
+	Jar CookieJar // 处理 cookie 相关操作，默认发送数据不携带 cookie
 
-	// Timeout specifies a time limit for requests made by this
-	// Client. The timeout includes connection time, any
-	// redirects, and reading the response body. The timer remains
-	// running after Get, Head, Post, or Do return and will
-	// interrupt reading of the Response.Body.
-	//
-	// A Timeout of zero means no timeout.
-	//
-	// The Client cancels requests to the underlying Transport
-	// as if the Request's Context ended.
-	//
-	// For compatibility, the Client will also use the deprecated
-	// CancelRequest method on Transport if found. New
-	// RoundTripper implementations should use the Request's Context
-	// for cancellation instead of implementing CancelRequest.
-	Timeout time.Duration
+	Timeout time.Duration // http 请求超时时间，该超时时间为单个 http 请求全生命周期所消耗的时间，包括连接创建、发送、读取响应等
 }
 
-// DefaultClient is the default Client and is used by Get, Head, and Post.
+// 默认 http client，http 包的 Get、Head、Post 方法默认使用该 client，* 该默认 client 未设置超时时间，可能导致请求一直进行，但没有返回 *
 var DefaultClient = &Client{}
 
-// RoundTripper is an interface representing the ability to execute a
-// single HTTP transaction, obtaining the Response for a given Request.
-//
-// A RoundTripper must be safe for concurrent use by multiple
-// goroutines.
-type RoundTripper interface {
-	// RoundTrip executes a single HTTP transaction, returning
-	// a Response for the provided Request.
-	//
-	// RoundTrip should not attempt to interpret the response. In
-	// particular, RoundTrip must return err == nil if it obtained
-	// a response, regardless of the response's HTTP status code.
-	// A non-nil err should be reserved for failure to obtain a
-	// response. Similarly, RoundTrip should not attempt to
-	// handle higher-level protocol details such as redirects,
-	// authentication, or cookies.
-	//
-	// RoundTrip should not modify the request, except for
-	// consuming and closing the Request's Body. RoundTrip may
-	// read fields of the request in a separate goroutine. Callers
-	// should not mutate or reuse the request until the Response's
-	// Body has been closed.
-	//
-	// RoundTrip must always close the body, including on errors,
-	// but depending on the implementation may do so in a separate
-	// goroutine even after RoundTrip returns. This means that
-	// callers wanting to reuse the body for subsequent requests
-	// must arrange to wait for the Close call before doing so.
-	//
-	// The Request's URL and Header fields must be initialized.
-	RoundTrip(*Request) (*Response, error)
+type RoundTripper interface { // RoundTripper 定义发送和接收 http 请求，RoundTripper 应该是并发安全的
+	RoundTrip(*Request) (*Response, error) // RoundTrip 发送 Requet，读取响应，将数据封装进 Response
 }
 
 // refererForURL returns a referer without any authentication info or
@@ -166,7 +67,7 @@ func refererForURL(lastReq, newReq *url.URL) string {
 	return referer
 }
 
-// didTimeout is non-nil only if err != nil.
+// client 的 send 方法，处理 cookie，调用 send 函数发送请求
 func (c *Client) send(req *Request, deadline time.Time) (resp *Response, didTimeout func() bool, err error) {
 	if c.Jar != nil {
 		for _, cookie := range c.Jar.Cookies(req.URL) {
@@ -185,6 +86,7 @@ func (c *Client) send(req *Request, deadline time.Time) (resp *Response, didTime
 	return resp, nil, nil
 }
 
+// 返回超时时间点
 func (c *Client) deadline() time.Time {
 	if c.Timeout > 0 {
 		return time.Now().Add(c.Timeout)
@@ -192,6 +94,7 @@ func (c *Client) deadline() time.Time {
 	return time.Time{}
 }
 
+// 返回 client 的 Transport
 func (c *Client) transport() RoundTripper {
 	if c.Transport != nil {
 		return c.Transport
@@ -199,8 +102,7 @@ func (c *Client) transport() RoundTripper {
 	return DefaultTransport
 }
 
-// send issues an HTTP request.
-// Caller should close resp.Body when done reading from it.
+// 发送 http 请求，调用方应该主动关闭 resp.body
 func send(ireq *Request, rt RoundTripper, deadline time.Time) (resp *Response, didTimeout func() bool, err error) {
 	req := ireq // req is either the original request, or a modified fork
 
@@ -221,22 +123,19 @@ func send(ireq *Request, rt RoundTripper, deadline time.Time) (resp *Response, d
 
 	// forkReq forks req into a shallow clone of ireq the first
 	// time it's called.
-	forkReq := func() {
+	forkReq := func() { // req 浅拷贝 ireq, 为啥？
 		if ireq == req {
 			req = new(Request)
 			*req = *ireq // shallow clone
 		}
 	}
 
-	// Most the callers of send (Get, Post, et al) don't need
-	// Headers, leaving it uninitialized. We guarantee to the
-	// Transport that this has been initialized, though.
-	if req.Header == nil {
+	if req.Header == nil { // 确保请求头被初始化
 		forkReq()
 		req.Header = make(Header)
 	}
 
-	if u := req.URL.User; u != nil && req.Header.Get("Authorization") == "" {
+	if u := req.URL.User; u != nil && req.Header.Get("Authorization") == "" { // 当 header 设置了用户名和密码，且无 Authorization 头时，添加 Authorization 头，不重写 Authorization 头
 		username := u.Username()
 		password, _ := u.Password()
 		forkReq()
@@ -247,9 +146,9 @@ func send(ireq *Request, rt RoundTripper, deadline time.Time) (resp *Response, d
 	if !deadline.IsZero() {
 		forkReq()
 	}
-	stopTimer, didTimeout := setRequestCancel(req, rt, deadline)
+	stopTimer, didTimeout := setRequestCancel(req, rt, deadline) // 启动 goroutine 监听请求超时
 
-	resp, err = rt.RoundTrip(req)
+	resp, err = rt.RoundTrip(req) // 调用 transport 的 RoundTrip 方法发送请求，见 net/http/transport.go
 	if err != nil {
 		stopTimer()
 		if resp != nil {
@@ -332,15 +231,7 @@ func knownRoundTripperImpl(rt RoundTripper, req *Request) bool {
 	return false
 }
 
-// setRequestCancel sets req.Cancel and adds a deadline context to req
-// if deadline is non-zero. The RoundTripper's type is used to
-// determine whether the legacy CancelRequest behavior should be used.
-//
-// As background, there are three ways to cancel a request:
-// First was Transport.CancelRequest. (deprecated)
-// Second was Request.Cancel.
-// Third was Request.Context.
-// This function populates the second and third, and uses the first if it really needs to.
+// 设置 req cancel 函数，在超时时间达到后取消请求，由于默认的 client 超时时间为 0，因此不会触发 select 中的 case，使得请求永远不会停止
 func setRequestCancel(req *Request, rt RoundTripper, deadline time.Time) (stopTimer func(), didTimeout func() bool) {
 	if deadline.IsZero() {
 		return nop, alwaysFalse
@@ -410,68 +301,19 @@ func setRequestCancel(req *Request, rt RoundTripper, deadline time.Time) (stopTi
 	return stopTimer, timedOut.isSet
 }
 
-// See 2 (end of page 4) https://www.ietf.org/rfc/rfc2617.txt
-// "To receive authorization, the client sends the userid and password,
-// separated by a single colon (":") character, within a base64
-// encoded string in the credentials."
-// It is not meant to be urlencoded.
+// basic auth 编码
 func basicAuth(username, password string) string {
 	auth := username + ":" + password
 	return base64.StdEncoding.EncodeToString([]byte(auth))
 }
 
-// Get issues a GET to the specified URL. If the response is one of
-// the following redirect codes, Get follows the redirect, up to a
-// maximum of 10 redirects:
-//
-//    301 (Moved Permanently)
-//    302 (Found)
-//    303 (See Other)
-//    307 (Temporary Redirect)
-//    308 (Permanent Redirect)
-//
-// An error is returned if there were too many redirects or if there
-// was an HTTP protocol error. A non-2xx response doesn't cause an
-// error. Any returned error will be of type *url.Error. The url.Error
-// value's Timeout method will report true if the request timed out.
-//
-// When err is nil, resp always contains a non-nil resp.Body.
-// Caller should close resp.Body when done reading from it.
-//
-// Get is a wrapper around DefaultClient.Get.
-//
-// To make a request with custom headers, use NewRequest and
-// DefaultClient.Do.
-//
-// To make a request with a specified context.Context, use NewRequestWithContext
-// and DefaultClient.Do.
+// 使用默认 client 发送 Get 请求，该方法会自动处理 301、302、303、307、308 响应，最多重定向 10 次，自定义 Header 需要使用 NewRequest 创建 Req，然后调用 Client 的 Do 方法发送请求
+// 如果要使用 Context，则使用 NewRequestWithContext 创建一个 Req，然后调用 Client 的 Do 方法发送请求
 func Get(url string) (resp *Response, err error) {
 	return DefaultClient.Get(url)
 }
 
-// Get issues a GET to the specified URL. If the response is one of the
-// following redirect codes, Get follows the redirect after calling the
-// Client's CheckRedirect function:
-//
-//    301 (Moved Permanently)
-//    302 (Found)
-//    303 (See Other)
-//    307 (Temporary Redirect)
-//    308 (Permanent Redirect)
-//
-// An error is returned if the Client's CheckRedirect function fails
-// or if there was an HTTP protocol error. A non-2xx response doesn't
-// cause an error. Any returned error will be of type *url.Error. The
-// url.Error value's Timeout method will report true if the request
-// timed out.
-//
-// When err is nil, resp always contains a non-nil resp.Body.
-// Caller should close resp.Body when done reading from it.
-//
-// To make a request with custom headers, use NewRequest and Client.Do.
-//
-// To make a request with a specified context.Context, use NewRequestWithContext
-// and Client.Do.
+//使用自定义的 client 发送 Get 请求，首先调用 NewRequest 创建一个 Request， 然后发送请求
 func (c *Client) Get(url string) (resp *Response, err error) {
 	req, err := NewRequest("GET", url, nil)
 	if err != nil {
@@ -488,8 +330,7 @@ func alwaysFalse() bool { return false }
 // unclosed.
 var ErrUseLastResponse = errors.New("net/http: use last response")
 
-// checkRedirect calls either the user's configured CheckRedirect
-// function, or the default.
+// 执行重定向函数，默认使用 defaultCheckRedirect 重定向函数
 func (c *Client) checkRedirect(req *Request, via []*Request) error {
 	fn := c.CheckRedirect
 	if fn == nil {
@@ -500,6 +341,7 @@ func (c *Client) checkRedirect(req *Request, via []*Request) error {
 
 // redirectBehavior describes what should happen when the
 // client encounters a 3xx status code from the server
+// 处理响应状态码为 3xx 的响应
 func redirectBehavior(reqMethod string, resp *Response, ireq *Request) (redirectMethod string, shouldRedirect, includeBody bool) {
 	switch resp.StatusCode {
 	case 301, 302, 303:
@@ -589,12 +431,15 @@ func urlErrorOp(method string) string {
 //
 // Any returned error will be of type *url.Error. The url.Error
 // value's Timeout method will report true if the request timed out.
+
+// client 暴露的发送请求方法
 func (c *Client) Do(req *Request) (*Response, error) {
 	return c.do(req)
 }
 
 var testHookClientDoResult func(retres *Response, reterr error)
 
+// 执行 http 请求发送
 func (c *Client) do(req *Request) (retres *Response, reterr error) {
 	if testHookClientDoResult != nil {
 		defer func() { testHookClientDoResult(retres, reterr) }()
@@ -651,9 +496,8 @@ func (c *Client) do(req *Request) (retres *Response, reterr error) {
 			}
 			host := ""
 			if req.Host != "" && req.Host != req.URL.Host {
-				// If the caller specified a custom Host header and the
-				// redirect location is relative, preserve the Host header
-				// through the redirect. See issue #22233.
+				//  See issue #22233.
+				// 当用户设置特定 Host 头，且重定地址为一个相对地址时，重定向请求使用用户设置的 host， 没看出校验了是否时相对地址？
 				if u, _ := url.Parse(loc); u != nil && !u.IsAbs() {
 					host = req.Host
 				}
@@ -668,7 +512,7 @@ func (c *Client) do(req *Request) (retres *Response, reterr error) {
 				Cancel:   ireq.Cancel,
 				ctx:      ireq.ctx,
 			}
-			if includeBody && ireq.GetBody != nil {
+			if includeBody && ireq.GetBody != nil { // 重定向请求不发送 body
 				req.Body, err = ireq.GetBody()
 				if err != nil {
 					resp.closeBody()
@@ -676,11 +520,6 @@ func (c *Client) do(req *Request) (retres *Response, reterr error) {
 				}
 				req.ContentLength = ireq.ContentLength
 			}
-
-			// Copy original headers before setting the Referer,
-			// in case the user set Referer on their first request.
-			// If they really want to override, they can do it in
-			// their CheckRedirect func.
 			copyHeaders(req)
 
 			// Add the Referer header from the most recent
@@ -722,7 +561,7 @@ func (c *Client) do(req *Request) (retres *Response, reterr error) {
 		reqs = append(reqs, req)
 		var err error
 		var didTimeout func() bool
-		if resp, didTimeout, err = c.send(req, deadline); err != nil {
+		if resp, didTimeout, err = c.send(req, deadline); err != nil { // 调用 send 方法发送请求
 			// c.send() always closes req.Body
 			reqBodyClosed = true
 			if !deadline.IsZero() && didTimeout() {
@@ -735,7 +574,7 @@ func (c *Client) do(req *Request) (retres *Response, reterr error) {
 		}
 
 		var shouldRedirect bool
-		redirectMethod, shouldRedirect, includeBody = redirectBehavior(req.Method, resp, reqs[0])
+		redirectMethod, shouldRedirect, includeBody = redirectBehavior(req.Method, resp, reqs[0]) // 调用 redirectBehavior 函数判断是否进行重定向
 		if !shouldRedirect {
 			return resp, nil
 		}
@@ -744,12 +583,8 @@ func (c *Client) do(req *Request) (retres *Response, reterr error) {
 	}
 }
 
-// makeHeadersCopier makes a function that copies headers from the
-// initial Request, ireq. For every redirect, this function must be called
-// so that it can copy headers into the upcoming Request.
+// 在发生重定向时，复制请求头以便重定向请求使用， 该方法使用闭包来保持对原始头数据的引用
 func (c *Client) makeHeadersCopier(ireq *Request) func(*Request) {
-	// The headers to copy are from the very initial request.
-	// We use a closured callback to keep a reference to these original headers.
 	var (
 		ireqhdr  = cloneOrMakeHeader(ireq.Header)
 		icookies map[string][]*Cookie
@@ -808,6 +643,7 @@ func (c *Client) makeHeadersCopier(ireq *Request) func(*Request) {
 	}
 }
 
+// 默认重定向校验函数，主要功能为统计重定向次数，超过十次返回错误
 func defaultCheckRedirect(req *Request, via []*Request) error {
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
@@ -815,40 +651,13 @@ func defaultCheckRedirect(req *Request, via []*Request) error {
 	return nil
 }
 
-// Post issues a POST to the specified URL.
-//
-// Caller should close resp.Body when done reading from it.
-//
-// If the provided body is an io.Closer, it is closed after the
-// request.
-//
-// Post is a wrapper around DefaultClient.Post.
-//
-// To set custom headers, use NewRequest and DefaultClient.Do.
-//
-// See the Client.Do method documentation for details on how redirects
-// are handled.
-//
-// To make a request with a specified context.Context, use NewRequestWithContext
-// and DefaultClient.Do.
+// If the provided body is an io.Closer, it is closed after the request.
+// 使用默认 client 发送 post 请求，调用户需要主动关闭 resp.Body，自定义 request 需要使用 NewRequest 创建 request，然后使用 client 的 Do 方法发送 request
 func Post(url, contentType string, body io.Reader) (resp *Response, err error) {
 	return DefaultClient.Post(url, contentType, body)
 }
 
-// Post issues a POST to the specified URL.
-//
-// Caller should close resp.Body when done reading from it.
-//
-// If the provided body is an io.Closer, it is closed after the
-// request.
-//
-// To set custom headers, use NewRequest and Client.Do.
-//
-// To make a request with a specified context.Context, use NewRequestWithContext
-// and Client.Do.
-//
-// See the Client.Do method documentation for details on how redirects
-// are handled.
+// 自定义 Client 的 Post 方法，与 Get 一样，先创建 Request，然后调用 Do 方法发送 Reqeust
 func (c *Client) Post(url, contentType string, body io.Reader) (resp *Response, err error) {
 	req, err := NewRequest("POST", url, body)
 	if err != nil {
@@ -858,74 +667,22 @@ func (c *Client) Post(url, contentType string, body io.Reader) (resp *Response, 
 	return c.Do(req)
 }
 
-// PostForm issues a POST to the specified URL, with data's keys and
-// values URL-encoded as the request body.
-//
-// The Content-Type header is set to application/x-www-form-urlencoded.
-// To set other headers, use NewRequest and DefaultClient.Do.
-//
-// When err is nil, resp always contains a non-nil resp.Body.
-// Caller should close resp.Body when done reading from it.
-//
-// PostForm is a wrapper around DefaultClient.PostForm.
-//
-// See the Client.Do method documentation for details on how redirects
-// are handled.
-//
-// To make a request with a specified context.Context, use NewRequestWithContext
-// and DefaultClient.Do.
+// 使用默认的 client 以 form 形式发送 post 请求，参数会编码进 URL，该方法需要主动关闭 resp.Body
 func PostForm(url string, data url.Values) (resp *Response, err error) {
 	return DefaultClient.PostForm(url, data)
 }
 
-// PostForm issues a POST to the specified URL,
-// with data's keys and values URL-encoded as the request body.
-//
-// The Content-Type header is set to application/x-www-form-urlencoded.
-// To set other headers, use NewRequest and Client.Do.
-//
-// When err is nil, resp always contains a non-nil resp.Body.
-// Caller should close resp.Body when done reading from it.
-//
-// See the Client.Do method documentation for details on how redirects
-// are handled.
-//
-// To make a request with a specified context.Context, use NewRequestWithContext
-// and Client.Do.
+// 自定义 Client 的 Post 方法，，先创建 Request，然后调用 Post 方法发送 Reqeust，设置 content-type，与 post 方法的唯一区别是 content-type
 func (c *Client) PostForm(url string, data url.Values) (resp *Response, err error) {
 	return c.Post(url, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 }
 
-// Head issues a HEAD to the specified URL. If the response is one of
-// the following redirect codes, Head follows the redirect, up to a
-// maximum of 10 redirects:
-//
-//    301 (Moved Permanently)
-//    302 (Found)
-//    303 (See Other)
-//    307 (Temporary Redirect)
-//    308 (Permanent Redirect)
-//
-// Head is a wrapper around DefaultClient.Head
-//
-// To make a request with a specified context.Context, use NewRequestWithContext
-// and DefaultClient.Do.
+// 使用默认的 client 发送 Head 请求，最多支持重定向(301、302、303、307、308) 10 次
 func Head(url string) (resp *Response, err error) {
 	return DefaultClient.Head(url)
 }
 
-// Head issues a HEAD to the specified URL. If the response is one of the
-// following redirect codes, Head follows the redirect after calling the
-// Client's CheckRedirect function:
-//
-//    301 (Moved Permanently)
-//    302 (Found)
-//    303 (See Other)
-//    307 (Temporary Redirect)
-//    308 (Permanent Redirect)
-//
-// To make a request with a specified context.Context, use NewRequestWithContext
-// and Client.Do.
+// 使用自定义的 client 发送 Head 请求，最多支持重定向(301、302、303、307、308) 10 次
 func (c *Client) Head(url string) (resp *Response, err error) {
 	req, err := NewRequest("HEAD", url, nil)
 	if err != nil {
@@ -934,13 +691,7 @@ func (c *Client) Head(url string) (resp *Response, err error) {
 	return c.Do(req)
 }
 
-// CloseIdleConnections closes any connections on its Transport which
-// were previously connected from previous requests but are now
-// sitting idle in a "keep-alive" state. It does not interrupt any
-// connections currently in use.
-//
-// If the Client's Transport does not have a CloseIdleConnections method
-// then this method does nothing.
+// 客户端的 Transport 包含 CloseIdleConnections 方法时，调用 CloseIdleConnections 方法关闭所有未使用的连接
 func (c *Client) CloseIdleConnections() {
 	type closeIdler interface {
 		CloseIdleConnections()

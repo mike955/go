@@ -9,21 +9,9 @@ import (
 	"unsafe"
 )
 
-// Map is like a Go map[interface{}]interface{} but is safe for concurrent use
-// by multiple goroutines without additional locking or coordination.
-// Loads, stores, and deletes run in amortized constant time.
-//
-// The Map type is specialized. Most code should use a plain Go map instead,
-// with separate locking or coordination, for better type safety and to make it
-// easier to maintain other invariants along with the map content.
-//
-// The Map type is optimized for two common use cases: (1) when the entry for a given
-// key is only ever written once but read many times, as in caches that only grow,
-// or (2) when multiple goroutines read, write, and overwrite entries for disjoint
-// sets of keys. In these two cases, use of a Map may significantly reduce lock
-// contention compared to a Go map paired with a separate Mutex or RWMutex.
-//
-// The zero Map is empty and ready for use. A Map must not be copied after first use.
+// sync.Map 是一个并发安全的哈希表，包含 load、store、delete 三个方法，两种场景下 sync.map 比带锁的 map 高效：
+// 		- 1.读多写少
+//		- 2.多个 goroutine 读写的 key 不相交
 type Map struct {
 	mu Mutex
 

@@ -33,200 +33,62 @@ import (
 	"golang.org/x/net/http/httpguts"
 )
 
-// Errors used by the HTTP server.
+/*
+	什么是多路复用器，什么是 server，什么是 Handler，什么是 handler，什么是 Handle，什么是 HandlerFunc
+	// 处理 http 完成整理
+	1. 注册
+	2. 路径标准化
+*/
+
+// 定义相关错误.
 var (
-	// ErrBodyNotAllowed is returned by ResponseWriter.Write calls
-	// when the HTTP method or response code does not permit a
-	// body.
 	ErrBodyNotAllowed = errors.New("http: request method or response status code does not allow body")
 
-	// ErrHijacked is returned by ResponseWriter.Write calls when
-	// the underlying connection has been hijacked using the
-	// Hijacker interface. A zero-byte write on a hijacked
-	// connection will return ErrHijacked without any other side
-	// effects.
 	ErrHijacked = errors.New("http: connection has been hijacked")
 
-	// ErrContentLength is returned by ResponseWriter.Write calls
-	// when a Handler set a Content-Length response header with a
-	// declared size and then attempted to write more bytes than
-	// declared.
 	ErrContentLength = errors.New("http: wrote more than the declared Content-Length")
 
-	// Deprecated: ErrWriteAfterFlush is no longer returned by
-	// anything in the net/http package. Callers should not
-	// compare errors against this variable.
 	ErrWriteAfterFlush = errors.New("unused")
 )
 
-// A Handler responds to an HTTP request.
-//
-// ServeHTTP should write reply headers and data to the ResponseWriter
-// and then return. Returning signals that the request is finished; it
-// is not valid to use the ResponseWriter or read from the
-// Request.Body after or concurrently with the completion of the
-// ServeHTTP call.
-//
-// Depending on the HTTP client software, HTTP protocol version, and
-// any intermediaries between the client and the Go server, it may not
-// be possible to read from the Request.Body after writing to the
-// ResponseWriter. Cautious handlers should read the Request.Body
-// first, and then reply.
-//
-// Except for reading the body, handlers should not modify the
-// provided Request.
-//
-// If ServeHTTP panics, the server (the caller of ServeHTTP) assumes
-// that the effect of the panic was isolated to the active request.
-// It recovers the panic, logs a stack trace to the server error log,
-// and either closes the network connection or sends an HTTP/2
-// RST_STREAM, depending on the HTTP protocol. To abort a handler so
-// the client sees an interrupted response but the server doesn't log
-// an error, panic with the value ErrAbortHandler.
+/* Handler 接口定义了一个方法 ServeHTTP, 该方法处理接收到的请求，需要做好以下几件事
+- 封装响应头和数据到 ResponseWriter，同时返回数据
+- 返回请求被完成的信号
+- ServeHTTP 调用完成后，ResponseWriter 对象会变无效，同时无法从 Resp.Body 中读取数据，即只能在 ServeHTTP 函数中进行读写操作
+*/
 type Handler interface {
 	ServeHTTP(ResponseWriter, *Request)
 }
 
-// A ResponseWriter interface is used by an HTTP handler to
-// construct an HTTP response.
-//
-// A ResponseWriter may not be used after the Handler.ServeHTTP method
-// has returned.
+/*
+	ResponseWriter 接口用于构造一个 http 响应，ResponseWriter 应该在 Handler.ServeHTTP 内部使用
+*/
 type ResponseWriter interface {
-	// Header returns the header map that will be sent by
-	// WriteHeader. The Header map also is the mechanism with which
-	// Handlers can set HTTP trailers.
-	//
-	// Changing the header map after a call to WriteHeader (or
-	// Write) has no effect unless the modified headers are
-	// trailers.
-	//
-	// There are two ways to set Trailers. The preferred way is to
-	// predeclare in the headers which trailers you will later
-	// send by setting the "Trailer" header to the names of the
-	// trailer keys which will come later. In this case, those
-	// keys of the Header map are treated as if they were
-	// trailers. See the example. The second way, for trailer
-	// keys not known to the Handler until after the first Write,
-	// is to prefix the Header map keys with the TrailerPrefix
-	// constant value. See TrailerPrefix.
-	//
-	// To suppress automatic response headers (such as "Date"), set
-	// their value to nil.
+	// 返回要发送的响应头，WriteHeader 或 Write 方法被调用后，响应头无法被修改，因此 WriteHeader 或 Write 方法应该被最后调用。因为 WriteHeader 或 Write 被调用后会发送响应头和状态码，响应已经发出，修改已没有意义
+	// writeHeader 或 Write 方法被调用后可以修改 trailers, 修改 trailers 有两种方法
+	//	- 在 header 中预先声明 Trailer 名称，稍后给该名称赋值
+	// 	- 对于预先不知道的 Trailer 名称，可以使用 TrailerPrefix 设置前缀，稍后赋值
 	Header() Header
 
-	// Write writes the data to the connection as part of an HTTP reply.
-	//
-	// If WriteHeader has not yet been called, Write calls
-	// WriteHeader(http.StatusOK) before writing the data. If the Header
-	// does not contain a Content-Type line, Write adds a Content-Type set
-	// to the result of passing the initial 512 bytes of written data to
-	// DetectContentType. Additionally, if the total size of all written
-	// data is under a few KB and there are no Flush calls, the
-	// Content-Length header is added automatically.
-	//
-	// Depending on the HTTP protocol version and the client, calling
-	// Write or WriteHeader may prevent future reads on the
-	// Request.Body. For HTTP/1.x requests, handlers should read any
-	// needed request body data before writing the response. Once the
-	// headers have been flushed (due to either an explicit Flusher.Flush
-	// call or writing enough data to trigger a flush), the request body
-	// may be unavailable. For HTTP/2 requests, the Go HTTP server permits
-	// handlers to continue to read the request body while concurrently
-	// writing the response. However, such behavior may not be supported
-	// by all HTTP/2 clients. Handlers should read before writing if
-	// possible to maximize compatibility.
+	// 向连接写数据，如果 WriteHeader 没有被调用，将调用 WriteHeader，状态码设置为 200，同时判断 content-type 是否被设置，如果没有被设置将设置
 	Write([]byte) (int, error)
 
-	// WriteHeader sends an HTTP response header with the provided
-	// status code.
-	//
-	// If WriteHeader is not called explicitly, the first call to Write
-	// will trigger an implicit WriteHeader(http.StatusOK).
-	// Thus explicit calls to WriteHeader are mainly used to
-	// send error codes.
-	//
-	// The provided code must be a valid HTTP 1xx-5xx status code.
-	// Only one header may be written. Go does not currently
-	// support sending user-defined 1xx informational headers,
-	// with the exception of 100-continue response header that the
-	// Server sends automatically when the Request.Body is read.
+	// 发送 http 响应头和状态码
 	WriteHeader(statusCode int)
 }
 
-// The Flusher interface is implemented by ResponseWriters that allow
-// an HTTP handler to flush buffered data to the client.
-//
-// The default HTTP/1.x and HTTP/2 ResponseWriter implementations
-// support Flusher, but ResponseWriter wrappers may not. Handlers
-// should always test for this ability at runtime.
-//
-// Note that even for ResponseWriters that support Flush,
-// if the client is connected through an HTTP proxy,
-// the buffered data may not reach the client until the response
-// completes.
+// Flusher 接口允许 http handler 向 client 发送请求
 type Flusher interface {
-	// Flush sends any buffered data to the client.
-	Flush()
+	Flush() // 发送写 bufer 中的数据给客户端
 }
 
-// The Hijacker interface is implemented by ResponseWriters that allow
-// an HTTP handler to take over the connection.
-//
-// The default ResponseWriter for HTTP/1.x connections supports
-// Hijacker, but HTTP/2 connections intentionally do not.
-// ResponseWriter wrappers may also not support Hijacker. Handlers
-// should always test for this ability at runtime.
+// The Hijacker 接口允许 http handle 接管连接
 type Hijacker interface {
-	// Hijack lets the caller take over the connection.
-	// After a call to Hijack the HTTP server library
-	// will not do anything else with the connection.
-	//
-	// It becomes the caller's responsibility to manage
-	// and close the connection.
-	//
-	// The returned net.Conn may have read or write deadlines
-	// already set, depending on the configuration of the
-	// Server. It is the caller's responsibility to set
-	// or clear those deadlines as needed.
-	//
-	// The returned bufio.Reader may contain unprocessed buffered
-	// data from the client.
-	//
-	// After a call to Hijack, the original Request.Body must not
-	// be used. The original Request's Context remains valid and
-	// is not canceled until the Request's ServeHTTP method
-	// returns.
 	Hijack() (net.Conn, *bufio.ReadWriter, error)
 }
 
-// The CloseNotifier interface is implemented by ResponseWriters which
-// allow detecting when the underlying connection has gone away.
-//
-// This mechanism can be used to cancel long operations on the server
-// if the client has disconnected before the response is ready.
-//
-// Deprecated: the CloseNotifier interface predates Go's context package.
-// New code should use Request.Context instead.
+// CloseNotifier 接口用于检查底层连接是否断开，已废弃，推荐使用 Context
 type CloseNotifier interface {
-	// CloseNotify returns a channel that receives at most a
-	// single value (true) when the client connection has gone
-	// away.
-	//
-	// CloseNotify may wait to notify until Request.Body has been
-	// fully read.
-	//
-	// After the Handler has returned, there is no guarantee
-	// that the channel receives a value.
-	//
-	// If the protocol is HTTP/1.1 and CloseNotify is called while
-	// processing an idempotent request (such a GET) while
-	// HTTP/1.1 pipelining is in use, the arrival of a subsequent
-	// pipelined request may cause a value to be sent on the
-	// returned channel. In practice HTTP/1.1 pipelining is not
-	// enabled in browsers and not seen often in the wild. If this
-	// is a problem, use HTTP/2 or only use CloseNotify on methods
-	// such as POST.
 	CloseNotify() <-chan bool
 }
 
@@ -244,7 +106,7 @@ var (
 	LocalAddrContextKey = &contextKey{"local-addr"}
 )
 
-// A conn represents the server side of an HTTP connection.
+// http 连接
 type conn struct {
 	// server is the server on which the connection arrived.
 	// Immutable; never nil.
@@ -253,10 +115,7 @@ type conn struct {
 	// cancelCtx cancels the connection-level context.
 	cancelCtx context.CancelFunc
 
-	// rwc is the underlying network connection.
-	// This is never wrapped by other types and is the value given out
-	// to CloseNotifier callers. It is usually of type *net.TCPConn or
-	// *tls.Conn.
+	// 底层 tcp 或 tls 连接
 	rwc net.Conn
 
 	// remoteAddr is rwc.RemoteAddr().String(). It is not populated synchronously
@@ -2192,46 +2051,15 @@ func RedirectHandler(url string, code int) Handler {
 	return &redirectHandler{url, code}
 }
 
-// ServeMux is an HTTP request multiplexer.
-// It matches the URL of each incoming request against a list of registered
-// patterns and calls the handler for the pattern that
-// most closely matches the URL.
-//
-// Patterns name fixed, rooted paths, like "/favicon.ico",
-// or rooted subtrees, like "/images/" (note the trailing slash).
-// Longer patterns take precedence over shorter ones, so that
-// if there are handlers registered for both "/images/"
-// and "/images/thumbnails/", the latter handler will be
-// called for paths beginning "/images/thumbnails/" and the
-// former will receive requests for any other paths in the
-// "/images/" subtree.
-//
-// Note that since a pattern ending in a slash names a rooted subtree,
-// the pattern "/" matches all paths not matched by other registered
-// patterns, not just the URL with Path == "/".
-//
-// If a subtree has been registered and a request is received naming the
-// subtree root without its trailing slash, ServeMux redirects that
-// request to the subtree root (adding the trailing slash). This behavior can
-// be overridden with a separate registration for the path without
-// the trailing slash. For example, registering "/images/" causes ServeMux
-// to redirect a request for "/images" to "/images/", unless "/images" has
-// been registered separately.
-//
-// Patterns may optionally begin with a host name, restricting matches to
-// URLs on that host only. Host-specific patterns take precedence over
-// general patterns, so that a handler might register for the two patterns
-// "/codesearch" and "codesearch.google.com/" without also taking over
-// requests for "http://www.google.com/".
-//
-// ServeMux also takes care of sanitizing the URL request path and the Host
-// header, stripping the port number and redirecting any request containing . or
-// .. elements or repeated slashes to an equivalent, cleaner URL.
+// serveMux 是一个 http 请求多路复用器，根据传入的 url 在注册表中匹配最佳的 pattern, 并调用对应的 handler 处理请求
+// 	1.pattern 必须为根路径(/images)或根子树(/images/)，优先进行长路径匹配
+//	2.对于以斜线 / 结尾的 pattern，会匹配所有不能完全匹配的字路径，即 /images/ 会匹配 /images/xxx 形式或 /images 的路径，前提是 /images/xxx 和 /images 路径没有被注册
+// 	3.pattern 能够以 hostname 开头，这种形式 pattern 将只会匹配包含特定 host 的请求
 type ServeMux struct {
-	mu    sync.RWMutex
-	m     map[string]muxEntry
-	es    []muxEntry // slice of entries sorted from longest to shortest.
-	hosts bool       // whether any patterns contain hostnames
+	mu    sync.RWMutex        // 读写锁，操作注册表时使用
+	m     map[string]muxEntry // 存放注册的 patten 及其 Handler，map 的 key 为 pattern
+	es    []muxEntry          // 存放以 / 结尾的 pattern，按 pattern 从长到短排列
+	hosts bool                // 当有 pattern 不以 / 开头时，认为 patter 包含 host 信息，该字段置为 true
 }
 
 type muxEntry struct {
@@ -2239,15 +2067,13 @@ type muxEntry struct {
 	pattern string
 }
 
-// NewServeMux allocates and returns a new ServeMux.
-func NewServeMux() *ServeMux { return new(ServeMux) }
+func NewServeMux() *ServeMux { return new(ServeMux) } // 返回一个多路复用器实例
 
-// DefaultServeMux is the default ServeMux used by Serve.
-var DefaultServeMux = &defaultServeMux
+var DefaultServeMux = &defaultServeMux // golang http Server 默认使用 DefaultServeMux 多路复用器
 
 var defaultServeMux ServeMux
 
-// cleanPath returns the canonical path for p, eliminating . and .. elements.
+// 对路径进行规范化处理，返回以 / 开头的路径
 func cleanPath(p string) string {
 	if p == "" {
 		return "/"
@@ -2255,45 +2081,43 @@ func cleanPath(p string) string {
 	if p[0] != '/' {
 		p = "/" + p
 	}
+	// clean 方法会返回等效的最短路径名
+	//	1.用一个斜线代理多个斜线
+	//	2.清楚当前路径形式 ./
+	//	3.清楚父路径形式	../
+	//	4.返回形式以根路径开头 /
 	np := path.Clean(p)
-	// path.Clean removes trailing slash except for root;
-	// put the trailing slash back if necessary.
-	if p[len(p)-1] == '/' && np != "/" {
-		// Fast path for common case of p being the string we want:
-		if len(p) == len(np)+1 && strings.HasPrefix(p, np) {
+	// 根路径 / 之外的其它路径如果结尾为斜杆，且路径形式为最短路径，则删除末尾斜杆
+	if p[len(p)-1] == '/' && np != "/" { // 非根路径，以 / 结尾
+		if len(p) == len(np)+1 && strings.HasPrefix(p, np) { //路径形式为最短路径
 			np = p
-		} else {
+		} else { // 原始路径形式不为最短路径，尾部加上 /
 			np += "/"
 		}
 	}
 	return np
 }
 
-// stripHostPort returns h without any trailing ":<port>".
+// 返回不含端口号的地址
 func stripHostPort(h string) string {
-	// If no port on host, return unchanged
 	if strings.IndexByte(h, ':') == -1 {
 		return h
 	}
 	host, _, err := net.SplitHostPort(h)
 	if err != nil {
-		return h // on error, return unchanged
+		return h
 	}
 	return host
 }
 
-// Find a handler on a handler map given a path string.
-// Most-specific (longest) pattern wins.
+// 根据 url path 查找 handler
 func (mux *ServeMux) match(path string) (h Handler, pattern string) {
-	// Check for exact match first.
-	v, ok := mux.m[path]
+	v, ok := mux.m[path] // 是否完全匹配
 	if ok {
 		return v.h, v.pattern
 	}
 
-	// Check for longest valid match.  mux.es contains all patterns
-	// that end in / sorted from longest to shortest.
-	for _, e := range mux.es {
+	for _, e := range mux.es { // 前缀匹配
 		if strings.HasPrefix(path, e.pattern) {
 			return e.h, e.pattern
 		}
@@ -2317,9 +2141,7 @@ func (mux *ServeMux) redirectToPathSlash(host, path string, u *url.URL) (*url.UR
 	return u, true
 }
 
-// shouldRedirectRLocked reports whether the given path and host should be redirected to
-// path+"/". This should happen if a handler is registered for path+"/" but
-// not path -- see comments at ServeMux.
+// 判断路径 path 是否应该定向到 path + "/"
 func (mux *ServeMux) shouldRedirectRLocked(host, path string) bool {
 	p := []string{path, host + path}
 
@@ -2410,8 +2232,7 @@ func (mux *ServeMux) handler(host, path string) (h Handler, pattern string) {
 	return
 }
 
-// ServeHTTP dispatches the request to the handler whose
-// pattern most closely matches the request URL.
+// 处理请求
 func (mux *ServeMux) ServeHTTP(w ResponseWriter, r *Request) {
 	if r.RequestURI == "*" {
 		if r.ProtoAtLeast(1, 1) {
@@ -2424,8 +2245,7 @@ func (mux *ServeMux) ServeHTTP(w ResponseWriter, r *Request) {
 	h.ServeHTTP(w, r)
 }
 
-// Handle registers the handler for the given pattern.
-// If a handler already exists for pattern, Handle panics.
+// 向 pattern 注册指定 Handler
 func (mux *ServeMux) Handle(pattern string, handler Handler) {
 	mux.mu.Lock()
 	defer mux.mu.Unlock()
@@ -2436,7 +2256,7 @@ func (mux *ServeMux) Handle(pattern string, handler Handler) {
 	if handler == nil {
 		panic("http: nil handler")
 	}
-	if _, exist := mux.m[pattern]; exist {
+	if _, exist := mux.m[pattern]; exist { // pattern 不能重复注册
 		panic("http: multiple registrations for " + pattern)
 	}
 
@@ -2445,11 +2265,11 @@ func (mux *ServeMux) Handle(pattern string, handler Handler) {
 	}
 	e := muxEntry{h: handler, pattern: pattern}
 	mux.m[pattern] = e
-	if pattern[len(pattern)-1] == '/' {
-		mux.es = appendSorted(mux.es, e)
+	if pattern[len(pattern)-1] == '/' { // pattern 以 / 结尾，表示 pattern 为前缀匹配 pattern
+		mux.es = appendSorted(mux.es, e) // pattern 按从长到端排序，匹配时从前到后，可以保证最长匹配
 	}
 
-	if pattern[0] != '/' {
+	if pattern[0] != '/' { // 认为 pattern 包含 host 信息
 		mux.hosts = true
 	}
 }
@@ -2462,174 +2282,91 @@ func appendSorted(es []muxEntry, e muxEntry) []muxEntry {
 	if i == n {
 		return append(es, e)
 	}
-	// we now know that i points at where we want to insert
-	es = append(es, muxEntry{}) // try to grow the slice in place, any entry works.
-	copy(es[i+1:], es[i:])      // Move shorter entries down
+	es = append(es, muxEntry{})
+	copy(es[i+1:], es[i:])
 	es[i] = e
 	return es
 }
 
-// HandleFunc registers the handler function for the given pattern.
+// 设置路由及其处理函数
 func (mux *ServeMux) HandleFunc(pattern string, handler func(ResponseWriter, *Request)) {
 	if handler == nil {
 		panic("http: nil handler")
 	}
+	// 此处的 HandlerFunc 用于将 handler 变量转换为 HandlerFunc 类型，
+	// HandlerFunc 实现了 ServeHTTP 方式，因此 handler 也变成 Handler 类型，
+	// HandlerFunc 的 ServeHTTP 方法调用自身，因此调用 handler 的 ServeHTTP 方法时，执行的是自身，即 handler 方法
 	mux.Handle(pattern, HandlerFunc(handler))
 }
 
-// Handle registers the handler for the given pattern
-// in the DefaultServeMux.
-// The documentation for ServeMux explains how patterns are matched.
+// 向 DefaultServeMux 设置特定 pattern 的所使用的 Handler
 func Handle(pattern string, handler Handler) { DefaultServeMux.Handle(pattern, handler) }
 
-// HandleFunc registers the handler function for the given pattern
-// in the DefaultServeMux.
-// The documentation for ServeMux explains how patterns are matched.
+// 向 DefaultServeMux 设置路由及其处理函数
 func HandleFunc(pattern string, handler func(ResponseWriter, *Request)) {
 	DefaultServeMux.HandleFunc(pattern, handler)
 }
 
-// Serve accepts incoming HTTP connections on the listener l,
-// creating a new service goroutine for each. The service goroutines
-// read requests and then call handler to reply to them.
-//
-// The handler is typically nil, in which case the DefaultServeMux is used.
-//
-// HTTP/2 support is only enabled if the Listener returns *tls.Conn
-// connections and they were configured with "h2" in the TLS
-// Config.NextProtos.
-//
-// Serve always returns a non-nil error.
+// 使用用户传入的监听器和 Handler 启动 http 服务
 func Serve(l net.Listener, handler Handler) error {
 	srv := &Server{Handler: handler}
 	return srv.Serve(l)
 }
 
-// ServeTLS accepts incoming HTTPS connections on the listener l,
-// creating a new service goroutine for each. The service goroutines
-// read requests and then call handler to reply to them.
-//
-// The handler is typically nil, in which case the DefaultServeMux is used.
-//
-// Additionally, files containing a certificate and matching private key
-// for the server must be provided. If the certificate is signed by a
-// certificate authority, the certFile should be the concatenation
-// of the server's certificate, any intermediates, and the CA's certificate.
-//
-// ServeTLS always returns a non-nil error.
+// 使用用户传入的监听器和 Handler 启动 https 服务
 func ServeTLS(l net.Listener, handler Handler, certFile, keyFile string) error {
 	srv := &Server{Handler: handler}
 	return srv.ServeTLS(l, certFile, keyFile)
 }
 
-// A Server defines parameters for running an HTTP server.
-// The zero value for Server is a valid configuration.
+// Server 结构体定义了一个 http 服务器
 type Server struct {
-	// Addr optionally specifies the TCP address for the server to listen on,
-	// in the form "host:port". If empty, ":http" (port 80) is used.
-	// The service names are defined in RFC 6335 and assigned by IANA.
-	// See net.Dial for details of the address format.
-	Addr string
+	Addr string // 服务监听地址，host:port 或者 :port
 
-	Handler Handler // handler to invoke, http.DefaultServeMux if nil
+	Handler Handler // http 请求处理函数，默认为 http.DefaultServeMux
 
-	// TLSConfig optionally provides a TLS configuration for use
-	// by ServeTLS and ListenAndServeTLS. Note that this value is
-	// cloned by ServeTLS and ListenAndServeTLS, so it's not
-	// possible to modify the configuration with methods like
-	// tls.Config.SetSessionTicketKeys. To use
-	// SetSessionTicketKeys, use Server.Serve with a TLS Listener
-	// instead.
-	TLSConfig *tls.Config
+	TLSConfig *tls.Config // https ssl 配置
 
-	// ReadTimeout is the maximum duration for reading the entire
-	// request, including the body. A zero or negative value means
-	// there will be no timeout.
-	//
-	// Because ReadTimeout does not let Handlers make per-request
-	// decisions on each request body's acceptable deadline or
-	// upload rate, most users will prefer to use
-	// ReadHeaderTimeout. It is valid to use them both.
-	ReadTimeout time.Duration
+	ReadTimeout time.Duration // 读取请求超时时间，0 表示没有超时时间设置，该参数对所有请求生效
 
-	// ReadHeaderTimeout is the amount of time allowed to read
-	// request headers. The connection's read deadline is reset
-	// after reading the headers and the Handler can decide what
-	// is considered too slow for the body. If ReadHeaderTimeout
-	// is zero, the value of ReadTimeout is used. If both are
-	// zero, there is no timeout.
+	// 读取请求头超时时间，读取请求头后，连接的读取截止时间会重置，程序可以决定如何读取请求体，为 0 使用 ReadTimeout
 	ReadHeaderTimeout time.Duration
 
-	// WriteTimeout is the maximum duration before timing out
-	// writes of the response. It is reset whenever a new
-	// request's header is read. Like ReadTimeout, it does not
-	// let Handlers make decisions on a per-request basis.
-	// A zero or negative value means there will be no timeout.
-	WriteTimeout time.Duration
+	WriteTimeout time.Duration // 写请求超时时间
 
-	// IdleTimeout is the maximum amount of time to wait for the
-	// next request when keep-alives are enabled. If IdleTimeout
-	// is zero, the value of ReadTimeout is used. If both are
-	// zero, there is no timeout.
+	// 连接保持最大空闲时间，为 0 使用 ReadTimeout，都为 0 ，则连接不主动断开
 	IdleTimeout time.Duration
 
-	// MaxHeaderBytes controls the maximum number of bytes the
-	// server will read parsing the request header's keys and
-	// values, including the request line. It does not limit the
-	// size of the request body.
-	// If zero, DefaultMaxHeaderBytes is used.
+	// 设置读取请求头最大字节，默认为 DefaultMaxHeaderBytes
 	MaxHeaderBytes int
 
-	// TLSNextProto optionally specifies a function to take over
-	// ownership of the provided TLS connection when an ALPN
-	// protocol upgrade has occurred. The map key is the protocol
-	// name negotiated. The Handler argument should be used to
-	// handle HTTP requests and will initialize the Request's TLS
-	// and RemoteAddr if not already set. The connection is
-	// automatically closed when the function returns.
-	// If TLSNextProto is not nil, HTTP/2 support is not enabled
-	// automatically.
-	TLSNextProto map[string]func(*Server, *tls.Conn, Handler)
+	TLSNextProto map[string]func(*Server, *tls.Conn, Handler) // TSL 相关参数
 
-	// ConnState specifies an optional callback function that is
-	// called when a client connection changes state. See the
-	// ConnState type and associated constants for details.
+	// 设置一个回掉函数，当客户端状态更改时执行该函数
 	ConnState func(net.Conn, ConnState)
 
-	// ErrorLog specifies an optional logger for errors accepting
-	// connections, unexpected behavior from handlers, and
-	// underlying FileSystem errors.
-	// If nil, logging is done via the log package's standard logger.
-	ErrorLog *log.Logger
+	ErrorLog *log.Logger // 错误日志记录
 
-	// BaseContext optionally specifies a function that returns
-	// the base context for incoming requests on this server.
-	// The provided Listener is the specific Listener that's
-	// about to start accepting requests.
-	// If BaseContext is nil, the default is context.Background().
-	// If non-nil, it must return a non-nil context.
+	// 为每个 listener 设置初始化的 context，默认使用 context.Background
 	BaseContext func(net.Listener) context.Context
 
-	// ConnContext optionally specifies a function that modifies
-	// the context used for a new connection c. The provided ctx
-	// is derived from the base context and has a ServerContextKey
-	// value.
+	// 修改连接的 context
 	ConnContext func(ctx context.Context, c net.Conn) context.Context
 
 	inShutdown atomicBool // true when server is in shutdown
 
-	disableKeepAlives int32     // accessed atomically.
+	disableKeepAlives int32     // 是否关闭长连接
 	nextProtoOnce     sync.Once // guards setupHTTP2_* init
 	nextProtoErr      error     // result of http2.ConfigureServer if used
 
 	mu         sync.Mutex
 	listeners  map[*net.Listener]struct{}
-	activeConn map[*conn]struct{}
+	activeConn map[*conn]struct{} // 保存激活的连接
 	doneChan   chan struct{}
-	onShutdown []func()
+	onShutdown []func() // 存储执行 shutdown 时需要执行的函数
 }
 
-func (s *Server) getDoneChan() <-chan struct{} {
+func (s *Server) getDoneChan() <-chan struct{} { // 获取结束状态 channel
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.getDoneChanLocked()
@@ -2654,15 +2391,7 @@ func (s *Server) closeDoneChanLocked() {
 	}
 }
 
-// Close immediately closes all active net.Listeners and any
-// connections in state StateNew, StateActive, or StateIdle. For a
-// graceful shutdown, use Shutdown.
-//
-// Close does not attempt to close (and does not even know about)
-// any hijacked connections, such as WebSockets.
-//
-// Close returns any error returned from closing the Server's
-// underlying Listener(s).
+// 立即关闭监听服务和进行中的任务，暴力结束服务
 func (srv *Server) Close() error {
 	srv.inShutdown.setTrue()
 	srv.mu.Lock()
@@ -2676,35 +2405,14 @@ func (srv *Server) Close() error {
 	return err
 }
 
-// shutdownPollIntervalMax is the max polling interval when checking
-// quiescence during Server.Shutdown. Polling starts with a small
-// interval and backs off to the max.
-// Ideally we could find a solution that doesn't involve polling,
-// but which also doesn't have a high runtime cost (and doesn't
-// involve any contentious mutexes), but that is left as an
-// exercise for the reader.
+// 关闭服务期间，轮询检查队列最大时间间隔
 const shutdownPollIntervalMax = 500 * time.Millisecond
 
-// Shutdown gracefully shuts down the server without interrupting any
-// active connections. Shutdown works by first closing all open
-// listeners, then closing all idle connections, and then waiting
-// indefinitely for connections to return to idle and then shut down.
-// If the provided context expires before the shutdown is complete,
-// Shutdown returns the context's error, otherwise it returns any
-// error returned from closing the Server's underlying Listener(s).
-//
-// When Shutdown is called, Serve, ListenAndServe, and
-// ListenAndServeTLS immediately return ErrServerClosed. Make sure the
-// program doesn't exit and waits instead for Shutdown to return.
-//
-// Shutdown does not attempt to close nor wait for hijacked
-// connections such as WebSockets. The caller of Shutdown should
-// separately notify such long-lived connections of shutdown and wait
-// for them to close, if desired. See RegisterOnShutdown for a way to
-// register shutdown notification functions.
-//
-// Once Shutdown has been called on a server, it may not be reused;
-// future calls to methods such as Serve will return ErrServerClosed.
+// Shutdown 方法优雅的关闭服务器，不会中断任何活动的连接，原理为：
+//		- 1.关闭监听器
+//		- 2.关闭空闲连接
+//		- 3.等待非空闲连接转换为空闲状态，然后关闭
+// 如果 context 在正常关闭流程之前到期，会强制关闭非空闲连接，结束服务
 func (srv *Server) Shutdown(ctx context.Context) error {
 	srv.inShutdown.setTrue()
 
@@ -2719,8 +2427,7 @@ func (srv *Server) Shutdown(ctx context.Context) error {
 	pollIntervalBase := time.Millisecond
 	nextPollInterval := func() time.Duration {
 		// Add 10% jitter.
-		interval := pollIntervalBase + time.Duration(rand.Intn(int(pollIntervalBase/10)))
-		// Double and clamp for next time.
+		interval := pollIntervalBase + time.Duration(rand.Intn(int(pollIntervalBase/10))) // 轮询间隔依次增大
 		pollIntervalBase *= 2
 		if pollIntervalBase > shutdownPollIntervalMax {
 			pollIntervalBase = shutdownPollIntervalMax
@@ -2743,40 +2450,34 @@ func (srv *Server) Shutdown(ctx context.Context) error {
 	}
 }
 
-// RegisterOnShutdown registers a function to call on Shutdown.
-// This can be used to gracefully shutdown connections that have
-// undergone ALPN protocol upgrade or that have been hijacked.
-// This function should start protocol-specific graceful shutdown,
-// but should not wait for shutdown to complete.
+// 注册执行 shutdown 方法时执行的函数，可用于关闭加强过的应用层协议或被劫持的连接
 func (srv *Server) RegisterOnShutdown(f func()) {
 	srv.mu.Lock()
 	srv.onShutdown = append(srv.onShutdown, f)
 	srv.mu.Unlock()
 }
 
+// 返回监听器数量，关闭服务时使用
 func (s *Server) numListeners() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.listeners)
 }
 
-// closeIdleConns closes all idle connections and reports whether the
-// server is quiescent.
+// 关闭所有空闲连接
 func (s *Server) closeIdleConns() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	quiescent := true
 	for c := range s.activeConn {
 		st, unixSec := c.getState()
-		// Issue 22682: treat StateNew connections as if
-		// they're idle if we haven't read the first request's
-		// header in over 5 seconds.
+		// Issue 22682:
+		// 对于新创建的连接，如果 5 秒内没有收到请求，视为空闲连接
 		if st == StateNew && unixSec < time.Now().Unix()-5 {
 			st = StateIdle
 		}
 		if st != StateIdle || unixSec == 0 {
-			// Assume unixSec == 0 means it's a very new
-			// connection, without state set yet.
+			// 假设 unixSec 状态为 0 表示连接为新连接，且还未设置状态
 			quiescent = false
 			continue
 		}
@@ -2786,6 +2487,7 @@ func (s *Server) closeIdleConns() bool {
 	return quiescent
 }
 
+// 关闭监听器
 func (s *Server) closeListenersLocked() error {
 	var err error
 	for ln := range s.listeners {
@@ -2796,44 +2498,21 @@ func (s *Server) closeListenersLocked() error {
 	return err
 }
 
-// A ConnState represents the state of a client connection to a server.
-// It's used by the optional Server.ConnState hook.
-type ConnState int
+type ConnState int // 表示与客户端连接的状态
 
 const (
-	// StateNew represents a new connection that is expected to
-	// send a request immediately. Connections begin at this
-	// state and then transition to either StateActive or
-	// StateClosed.
-	StateNew ConnState = iota
-
-	// StateActive represents a connection that has read 1 or more
-	// bytes of a request. The Server.ConnState hook for
-	// StateActive fires before the request has entered a handler
-	// and doesn't fire again until the request has been
-	// handled. After the request is handled, the state
-	// transitions to StateClosed, StateHijacked, or StateIdle.
-	// For HTTP/2, StateActive fires on the transition from zero
-	// to one active request, and only transitions away once all
-	// active requests are complete. That means that ConnState
-	// cannot be used to do per-request work; ConnState only notes
-	// the overall state of the connection.
-	StateActive
-
-	// StateIdle represents a connection that has finished
-	// handling a request and is in the keep-alive state, waiting
-	// for a new request. Connections transition from StateIdle
-	// to either StateActive or StateClosed.
-	StateIdle
-
-	// StateHijacked represents a hijacked connection.
-	// This is a terminal state. It does not transition to StateClosed.
-	StateHijacked
-
-	// StateClosed represents a closed connection.
-	// This is a terminal state. Hijacked connections do not
-	// transition to StateClosed.
-	StateClosed
+	/*
+		可能的状态流：
+			StateNew -> StateActive -> StateClosed
+			StateNew -> StateActive -> StateIdle -> StateClosed
+			StateNew -> StateActive -> StateIdle -> StateActive(重复) -> StateClosed
+			StateNew -> StateClosed
+	*/
+	StateNew      ConnState = iota // 表示连接状态为新连接，预计将立即收到客户端请求数据
+	StateActive                    // 连接处于使用状态，
+	StateIdle                      // 空闲状态
+	StateHijacked                  // 劫持状态
+	StateClosed                    // 连接已关闭
 )
 
 var stateName = map[ConnState]string{
@@ -2848,9 +2527,7 @@ func (c ConnState) String() string {
 	return stateName[c]
 }
 
-// serverHandler delegates to either the server's Handler or
-// DefaultServeMux and also handles "OPTIONS *" requests.
-type serverHandler struct {
+type serverHandler struct { // 用于处理 OPTIONS 请求
 	srv *Server
 }
 
@@ -2880,15 +2557,7 @@ func (sh serverHandler) ServeHTTP(rw ResponseWriter, req *Request) {
 
 var silenceSemWarnContextKey = &contextKey{"silence-semicolons"}
 
-// AllowQuerySemicolons returns a handler that serves requests by converting any
-// unescaped semicolons in the URL query to ampersands, and invoking the handler h.
-//
-// This restores the pre-Go 1.17 behavior of splitting query parameters on both
-// semicolons and ampersands. (See golang.org/issue/25192). Note that this
-// behavior doesn't match that of many proxies, and the mismatch can lead to
-// security issues.
-//
-// AllowQuerySemicolons should be invoked before Request.ParseForm is called.
+// 将 url 中未转义的 ; 转换为 &，同时使用传入的 Handler 来处理请求
 func AllowQuerySemicolons(h Handler) Handler {
 	return HandlerFunc(func(w ResponseWriter, r *Request) {
 		if silenceSemicolonsWarning, ok := r.Context().Value(silenceSemWarnContextKey).(func()); ok {
@@ -2907,14 +2576,7 @@ func AllowQuerySemicolons(h Handler) Handler {
 	})
 }
 
-// ListenAndServe listens on the TCP network address srv.Addr and then
-// calls Serve to handle requests on incoming connections.
-// Accepted connections are configured to enable TCP keep-alives.
-//
-// If srv.Addr is blank, ":http" is used.
-//
-// ListenAndServe always returns a non-nil error. After Shutdown or Close,
-// the returned error is ErrServerClosed.
+// 开启 TCP 监听器，启动服务
 func (srv *Server) ListenAndServe() error {
 	if srv.shuttingDown() {
 		return ErrServerClosed
@@ -2932,16 +2594,9 @@ func (srv *Server) ListenAndServe() error {
 
 var testHookServerServe func(*Server, net.Listener) // used if non-nil
 
-// shouldDoServeHTTP2 reports whether Server.Serve should configure
-// automatic HTTP/2. (which sets up the srv.TLSNextProto map)
+// 返回是否应该开启 HTTP/2
 func (srv *Server) shouldConfigureHTTP2ForServe() bool {
 	if srv.TLSConfig == nil {
-		// Compatibility with Go 1.6:
-		// If there's no TLSConfig, it's possible that the user just
-		// didn't set it on the http.Server, but did pass it to
-		// tls.NewListener and passed that listener to Serve.
-		// So we should configure HTTP/2 (to set up srv.TLSNextProto)
-		// in case the listener returns an "h2" *tls.Conn.
 		return true
 	}
 	// The user specified a TLSConfig on their http.Server.
@@ -2954,20 +2609,12 @@ func (srv *Server) shouldConfigureHTTP2ForServe() bool {
 	return strSliceContains(srv.TLSConfig.NextProtos, http2NextProtoTLS)
 }
 
-// ErrServerClosed is returned by the Server's Serve, ServeTLS, ListenAndServe,
-// and ListenAndServeTLS methods after a call to Shutdown or Close.
 var ErrServerClosed = errors.New("http: Server closed")
 
-// Serve accepts incoming connections on the Listener l, creating a
-// new service goroutine for each. The service goroutines read requests and
-// then call srv.Handler to reply to them.
-//
-// HTTP/2 support is only enabled if the Listener returns *tls.Conn
-// connections and they were configured with "h2" in the TLS
-// Config.NextProtos.
-//
-// Serve always returns a non-nil error and closes l.
-// After Shutdown or Close, the returned error is ErrServerClosed.
+/*
+	1.运行传入的监听器
+	2.每个新接收到的连接使用一个独立的 goroutine 来处理
+*/
 func (srv *Server) Serve(l net.Listener) error {
 	if fn := testHookServerServe; fn != nil {
 		fn(srv, l) // call hook with unwrapped listener
@@ -2986,7 +2633,7 @@ func (srv *Server) Serve(l net.Listener) error {
 	}
 	defer srv.trackListener(&l, false)
 
-	baseCtx := context.Background()
+	baseCtx := context.Background() // 默认初始 context
 	if srv.BaseContext != nil {
 		baseCtx = srv.BaseContext(origListener)
 		if baseCtx == nil {
@@ -2994,11 +2641,10 @@ func (srv *Server) Serve(l net.Listener) error {
 		}
 	}
 
-	var tempDelay time.Duration // how long to sleep on accept failure
-
+	var tempDelay time.Duration // 接收请求休眠时间
 	ctx := context.WithValue(baseCtx, ServerContextKey, srv)
 	for {
-		rw, err := l.Accept()
+		rw, err := l.Accept() // 监听连接
 		if err != nil {
 			select {
 			case <-srv.getDoneChan():
@@ -3022,31 +2668,19 @@ func (srv *Server) Serve(l net.Listener) error {
 		}
 		connCtx := ctx
 		if cc := srv.ConnContext; cc != nil {
-			connCtx = cc(connCtx, rw)
+			connCtx = cc(connCtx, rw) // 接收到的请求放入 connCtx
 			if connCtx == nil {
 				panic("ConnContext returned nil")
 			}
 		}
 		tempDelay = 0
-		c := srv.newConn(rw)
-		c.setState(c.rwc, StateNew, runHooks) // before Serve can return
-		go c.serve(connCtx)
+		c := srv.newConn(rw)                  // 创建新连接，c 表示新连接
+		c.setState(c.rwc, StateNew, runHooks) // 处理连接状态，将该连接放入激活连接 map 中
+		go c.serve(connCtx)                   // 处理该连接
 	}
 }
 
-// ServeTLS accepts incoming connections on the Listener l, creating a
-// new service goroutine for each. The service goroutines perform TLS
-// setup and then read requests, calling srv.Handler to reply to them.
-//
-// Files containing a certificate and matching private key for the
-// server must be provided if neither the Server's
-// TLSConfig.Certificates nor TLSConfig.GetCertificate are populated.
-// If the certificate is signed by a certificate authority, the
-// certFile should be the concatenation of the server's certificate,
-// any intermediates, and the CA's certificate.
-//
-// ServeTLS always returns a non-nil error. After Shutdown or Close, the
-// returned error is ErrServerClosed.
+// 开启 tsl 服务，监听连接，并处理连接
 func (srv *Server) ServeTLS(l net.Listener, certFile, keyFile string) error {
 	// Setup HTTP/2 before srv.Serve, to initialize srv.TLSConfig
 	// before we clone it and create the TLS Listener.
@@ -3073,16 +2707,7 @@ func (srv *Server) ServeTLS(l net.Listener, certFile, keyFile string) error {
 	return srv.Serve(tlsListener)
 }
 
-// trackListener adds or removes a net.Listener to the set of tracked
-// listeners.
-//
-// We store a pointer to interface in the map set, in case the
-// net.Listener is not comparable. This is safe because we only call
-// trackListener via Serve and can track+defer untrack the same
-// pointer to local variable there. We never need to compare a
-// Listener from another caller.
-//
-// It reports whether the server is still up (not Shutdown or Closed).
+// 是否追踪连接状态
 func (s *Server) trackListener(ln *net.Listener, add bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3135,10 +2760,6 @@ func (s *Server) shuttingDown() bool {
 	return s.inShutdown.isSet()
 }
 
-// SetKeepAlivesEnabled controls whether HTTP keep-alives are enabled.
-// By default, keep-alives are always enabled. Only very
-// resource-constrained environments or servers in the process of
-// shutting down should disable them.
 func (srv *Server) SetKeepAlivesEnabled(v bool) {
 	if v {
 		atomic.StoreInt32(&srv.disableKeepAlives, 0)
@@ -3172,43 +2793,19 @@ func logf(r *Request, format string, args ...interface{}) {
 	}
 }
 
-// ListenAndServe listens on the TCP network address addr and then calls
-// Serve with handler to handle requests on incoming connections.
-// Accepted connections are configured to enable TCP keep-alives.
-//
-// The handler is typically nil, in which case the DefaultServeMux is used.
-//
-// ListenAndServe always returns a non-nil error.
+// 监听指定地址，并设置处理请求的 Handler
 func ListenAndServe(addr string, handler Handler) error {
 	server := &Server{Addr: addr, Handler: handler}
 	return server.ListenAndServe()
 }
 
-// ListenAndServeTLS acts identically to ListenAndServe, except that it
-// expects HTTPS connections. Additionally, files containing a certificate and
-// matching private key for the server must be provided. If the certificate
-// is signed by a certificate authority, the certFile should be the concatenation
-// of the server's certificate, any intermediates, and the CA's certificate.
+// 监听指定 tls 地址，并设置处理请求的 Handler
 func ListenAndServeTLS(addr, certFile, keyFile string, handler Handler) error {
 	server := &Server{Addr: addr, Handler: handler}
 	return server.ListenAndServeTLS(certFile, keyFile)
 }
 
-// ListenAndServeTLS listens on the TCP network address srv.Addr and
-// then calls ServeTLS to handle requests on incoming TLS connections.
-// Accepted connections are configured to enable TCP keep-alives.
-//
-// Filenames containing a certificate and matching private key for the
-// server must be provided if neither the Server's TLSConfig.Certificates
-// nor TLSConfig.GetCertificate are populated. If the certificate is
-// signed by a certificate authority, the certFile should be the
-// concatenation of the server's certificate, any intermediates, and
-// the CA's certificate.
-//
-// If srv.Addr is blank, ":https" is used.
-//
-// ListenAndServeTLS always returns a non-nil error. After Shutdown or
-// Close, the returned error is ErrServerClosed.
+// 启动 tls 服务
 func (srv *Server) ListenAndServeTLS(certFile, keyFile string) error {
 	if srv.shuttingDown() {
 		return ErrServerClosed
@@ -3228,9 +2825,7 @@ func (srv *Server) ListenAndServeTLS(certFile, keyFile string) error {
 	return srv.ServeTLS(ln, certFile, keyFile)
 }
 
-// setupHTTP2_ServeTLS conditionally configures HTTP/2 on
-// srv and reports whether there was an error setting it up. If it is
-// not configured for policy reasons, nil is returned.
+// 配置 HTTP/2
 func (srv *Server) setupHTTP2_ServeTLS() error {
 	srv.nextProtoOnce.Do(srv.onceSetNextProtoDefaults)
 	return srv.nextProtoErr
@@ -3272,17 +2867,7 @@ func (srv *Server) onceSetNextProtoDefaults() {
 	}
 }
 
-// TimeoutHandler returns a Handler that runs h with the given time limit.
-//
-// The new Handler calls h.ServeHTTP to handle each request, but if a
-// call runs for longer than its time limit, the handler responds with
-// a 503 Service Unavailable error and the given message in its body.
-// (If msg is empty, a suitable default message will be sent.)
-// After such a timeout, writes by h to its ResponseWriter will return
-// ErrHandlerTimeout.
-//
-// TimeoutHandler supports the Pusher interface but does not support
-// the Hijacker or Flusher interfaces.
+// 返回超时处理 Hanlder，可以直接被用户使用
 func TimeoutHandler(h Handler, dt time.Duration, msg string) Handler {
 	return &timeoutHandler{
 		handler: h,
