@@ -428,7 +428,7 @@ func (t *Transport) roundTrip(req *Request) (*Response, error) {
 
 	for {
 		select {
-		case <-ctx.Done(): // 每次请求浅判断是否超时
+		case <-ctx.Done(): // 每次请求前判断是否超时
 			req.closeBody()
 			return nil, ctx.Err()
 		default:

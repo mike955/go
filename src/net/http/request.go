@@ -830,33 +830,8 @@ func NewRequest(method, url string, body io.Reader) (*Request, error) {
 	return NewRequestWithContext(context.Background(), method, url, body)
 }
 
-// NewRequestWithContext returns a new Request given a method, URL, and
-// optional body.
-//
-// If the provided body is also an io.Closer, the returned
-// Request.Body is set to body and will be closed by the Client
-// methods Do, Post, and PostForm, and Transport.RoundTrip.
-//
-// NewRequestWithContext returns a Request suitable for use with
-// Client.Do or Transport.RoundTrip. To create a request for use with
-// testing a Server Handler, either use the NewRequest function in the
-// net/http/httptest package, use ReadRequest, or manually update the
-// Request fields. For an outgoing client request, the context
-// controls the entire lifetime of a request and its response:
-// obtaining a connection, sending the request, and reading the
-// response headers and body. See the Request type's documentation for
-// the difference between inbound and outbound request fields.
-//
-// If body is of type *bytes.Buffer, *bytes.Reader, or
-// *strings.Reader, the returned request's ContentLength is set to its
-// exact value (instead of -1), GetBody is populated (so 307 and 308
-// redirects can replay the body), and Body is set to NoBody if the
-// ContentLength is 0.
 func NewRequestWithContext(ctx context.Context, method, url string, body io.Reader) (*Request, error) {
 	if method == "" {
-		// We document that "" means "GET" for Request.Method, and people have
-		// relied on that from NewRequest, so keep that working.
-		// We still enforce validMethod for non-empty methods.
 		method = "GET"
 	}
 	if !validMethod(method) {
@@ -916,15 +891,7 @@ func NewRequestWithContext(ctx context.Context, method, url string, body io.Read
 			// period. People depend on it being 0 I
 			// guess. Maybe retry later. See Issue 18117.
 		}
-		// For client requests, Request.ContentLength of 0
-		// means either actually 0, or unknown. The only way
-		// to explicitly say that the ContentLength is zero is
-		// to set the Body to nil. But turns out too much code
-		// depends on NewRequest returning a non-nil Body,
-		// so we use a well-known ReadCloser variable instead
-		// and have the http package also treat that sentinel
-		// variable to mean explicitly zero.
-		if req.GetBody != nil && req.ContentLength == 0 {
+		if req.GetBody != nil && req.ContentLength == 0 { ///  request boy 为 0
 			req.Body = NoBody
 			req.GetBody = func() (io.ReadCloser, error) { return NoBody, nil }
 		}

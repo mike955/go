@@ -321,8 +321,7 @@ type Result interface {
 	RowsAffected() (int64, error)
 }
 
-// Stmt is a prepared statement. It is bound to a Conn and not
-// used by multiple goroutines concurrently.
+// 是一个准备好的声明，与一个连接绑定，不是并发安全的
 type Stmt interface {
 	// Close closes the statement.
 	//

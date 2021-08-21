@@ -2,17 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package sql provides a generic interface around SQL (or SQL-like)
-// databases.
-//
-// The sql package must be used in conjunction with a database driver.
-// See https://golang.org/s/sqldrivers for a list of drivers.
-//
-// Drivers that do not support context cancellation will not return until
-// after the query is completed.
-//
-// For usage examples, see the wiki page at
-// https://golang.org/s/sqlwiki.
 package sql
 
 import (
@@ -30,6 +19,26 @@ import (
 	"time"
 )
 
+// sql 包为 sql 或 类 sql 数据库提供了一个通用接口，不同的数据库驱动需要实现这些接口，应用程序就可以通过接口中的方法来与具体数据库打交到
+// 实际使用时，除了还需要引入具体的数据库驱动，只要一个数据库实现了 drive 中的接口，那么它就能被 go 语言使用
+/*
+	主要结构体
+		- DB: 代表一个数据库连接池，实例是一个顶级对象
+		- Conn: 代表数据库连接，实例是一个数据库连接
+		- Stmt: 一条包含占位符的 sql 语句，DBMS 会保存该 sql，后面可以使用不同的参数重复执行该语句
+			* https://golang.google.cn/doc/database/prepared-statements
+
+	主要方法
+		- Register: 向全局驱动 map 中注册驱动器
+		- (db *DB)Open: Open 方法会检查注册器是否存在相应的驱动，然后调用 OpenDB 方法连接数据库
+		- (db *DB)OpenDB: 根据提供的连接器验证数据库连接，该方法会立即放回，验证是异步的(新创建一个 goroutine 来验证连接)，
+		          如果验证连接错误，不该方法不会知晓，只有在使用的时候才会抛出，因此该方法执行后，最好调用 Ping 方法验证连接结果
+		- (db *DB)Query: 查询数据，参数为 sql 及其参数，默认重试 2 次
+			- 1.调用 (db *DB) Conn 获取连接，连接来自于连接池或新创建的连接
+			- 2.调用 (db *DB) ctxDriverQuery 执行查询
+		- (db *DB)Begin: 开启事物
+*/
+
 var (
 	driversMu sync.RWMutex
 	drivers   = make(map[string]driver.Driver)
@@ -38,9 +47,7 @@ var (
 // nowFunc returns the current time; it's overridden in tests.
 var nowFunc = time.Now
 
-// Register makes a database driver available by the provided name.
-// If Register is called twice with the same name or if driver is nil,
-// it panics.
+// 注册数据库驱动
 func Register(name string, driver driver.Driver) {
 	driversMu.Lock()
 	defer driversMu.Unlock()
@@ -441,72 +448,45 @@ type Out struct {
 // defers this error until a Scan.
 var ErrNoRows = errors.New("sql: no rows in result set")
 
-// DB is a database handle representing a pool of zero or more
-// underlying connections. It's safe for concurrent use by multiple
-// goroutines.
-//
-// The sql package creates and frees connections automatically; it
-// also maintains a free pool of idle connections. If the database has
-// a concept of per-connection state, such state can be reliably observed
-// within a transaction (Tx) or connection (Conn). Once DB.Begin is called, the
-// returned Tx is bound to a single connection. Once Commit or
-// Rollback is called on the transaction, that transaction's
-// connection is returned to DB's idle connection pool. The pool size
-// can be controlled with SetMaxIdleConns.
+// DB 结构体对象代表一个连接池，是并发安全的
+// sql 包自动创建和释放连接，如果数据库的连接有状态的话，可以通过 DB.Begin 将单个事务绑定到一个连接，Commit 或 Rollback 返回连接
 type DB struct {
-	// Atomic access only. At top of struct to prevent mis-alignment
-	// on 32-bit platforms. Of type time.Duration.
-	waitDuration int64 // Total time waited for new connections.
+	waitDuration int64 // 连接等待时间
 
-	connector driver.Connector
-	// numClosed is an atomic counter which represents a total number of
-	// closed connections. Stmt.openStmt checks it before cleaning closed
-	// connections in Stmt.css.
-	numClosed uint64
+	connector driver.Connector // 数据库连接器
+	numClosed uint64           // 数据库已经关闭的连接
 
 	mu           sync.Mutex // protects following fields
 	freeConn     []*driverConn
 	connRequests map[uint64]chan connRequest
 	nextRequest  uint64 // Next key to use in connRequests.
-	numOpen      int    // number of opened and pending open connections
-	// Used to signal the need for new connections
-	// a goroutine running connectionOpener() reads on this chan and
-	// maybeOpenNewConnections sends on the chan (one send per needed connection)
-	// It is closed during db.Close(). The close tells the connectionOpener
-	// goroutine to exit.
-	openerCh          chan struct{}
+	numOpen      int    // 数据库打开或 pending 状态的连接
+
+	openerCh          chan struct{} // 表示需要创建新连接
 	closed            bool
 	dep               map[finalCloser]depSet
 	lastPut           map[*driverConn]string // stacktrace of last conn's put; debug only
-	maxIdleCount      int                    // zero means defaultMaxIdleConns; negative means 0
-	maxOpen           int                    // <= 0 means unlimited
-	maxLifetime       time.Duration          // maximum amount of time a connection may be reused
-	maxIdleTime       time.Duration          // maximum amount of time a connection may be idle before being closed
+	maxIdleCount      int                    // 最大空闲连接，默认为 2
+	maxOpen           int                    // 最大打开连接，<= 0 means unlimited
+	maxLifetime       time.Duration          // 连接最大生命周期时间
+	maxIdleTime       time.Duration          // 连接最大空闲时间
 	cleanerCh         chan struct{}
-	waitCount         int64 // Total number of connections waited for.
-	maxIdleClosed     int64 // Total number of connections closed due to idle count.
-	maxIdleTimeClosed int64 // Total number of connections closed due to idle time.
-	maxLifetimeClosed int64 // Total number of connections closed due to max connection lifetime limit.
-
-	stop func() // stop cancels the connection opener.
+	waitCount         int64  // 连接等待数.
+	maxIdleClosed     int64  // 空闲连接超过设置数量关闭的连接数.
+	maxIdleTimeClosed int64  // 空连接超时关闭的连接数
+	maxLifetimeClosed int64  // 空闲连接超过生命周期关闭的连接数
+	stop              func() // stop cancels the connection opener.
 }
 
-// connReuseStrategy determines how (*DB).conn returns database connections.
+// 连接重用策略
 type connReuseStrategy uint8
 
 const (
-	// alwaysNewConn forces a new connection to the database.
-	alwaysNewConn connReuseStrategy = iota
-	// cachedOrNewConn returns a cached connection, if available, else waits
-	// for one to become available (if MaxOpenConns has been reached) or
-	// creates a new database connection.
-	cachedOrNewConn
+	alwaysNewConn   connReuseStrategy = iota // 每次都是新连接
+	cachedOrNewConn                          // 有限使用线程池中的空闲连接
 )
 
-// driverConn wraps a driver.Conn with a mutex, to
-// be held during all calls into the Conn. (including any calls onto
-// interfaces returned via that Conn, such as calls on Tx, Stmt,
-// Result, Rows)
+// 包含互斥锁的连接
 type driverConn struct {
 	db        *DB
 	createdAt time.Time
@@ -542,8 +522,7 @@ func (dc *driverConn) expired(timeout time.Duration) bool {
 	return dc.createdAt.Add(timeout).Before(nowFunc())
 }
 
-// resetSession checks if the driver connection needs the
-// session to be reset and if required, resets it.
+// 校验是否需要重置绘画，如果是，重置绘画
 func (dc *driverConn) resetSession(ctx context.Context) error {
 	dc.Lock()
 	defer dc.Unlock()
@@ -557,8 +536,7 @@ func (dc *driverConn) resetSession(ctx context.Context) error {
 	return nil
 }
 
-// validateConnection checks if the connection is valid and can
-// still be used. It also marks the session for reset if required.
+// 验证连接有效性
 func (dc *driverConn) validateConnection(needsReset bool) bool {
 	dc.Lock()
 	defer dc.Unlock()
@@ -572,8 +550,7 @@ func (dc *driverConn) validateConnection(needsReset bool) bool {
 	return true
 }
 
-// prepareLocked prepares the query on dc. When cg == nil the dc must keep track of
-// the prepared statements in a pool.
+// 准备查询语句，防止并发使用
 func (dc *driverConn) prepareLocked(ctx context.Context, cg stmtConnGrabber, query string) (*driverStmt, error) {
 	si, err := ctxDriverPrepare(ctx, dc.ci, query)
 	if err != nil {
@@ -656,9 +633,7 @@ func (dc *driverConn) finalClose() error {
 	return err
 }
 
-// driverStmt associates a driver.Stmt with the
-// *driverConn from which it came, so the driverConn's lock can be
-// held during calls.
+// 驱动声明
 type driverStmt struct {
 	sync.Locker // the *driverConn
 	si          driver.Stmt
@@ -765,22 +740,6 @@ func (t dsnConnector) Driver() driver.Driver {
 	return t.driver
 }
 
-// OpenDB opens a database using a Connector, allowing drivers to
-// bypass a string based data source name.
-//
-// Most users will open a database via a driver-specific connection
-// helper function that returns a *DB. No database drivers are included
-// in the Go standard library. See https://golang.org/s/sqldrivers for
-// a list of third-party drivers.
-//
-// OpenDB may just validate its arguments without creating a connection
-// to the database. To verify that the data source name is valid, call
-// Ping.
-//
-// The returned DB is safe for concurrent use by multiple goroutines
-// and maintains its own pool of idle connections. Thus, the OpenDB
-// function should be called just once. It is rarely necessary to
-// close a DB.
 func OpenDB(c driver.Connector) *DB {
 	ctx, cancel := context.WithCancel(context.Background())
 	db := &DB{

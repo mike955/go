@@ -2,19 +2,17 @@
 
 - [] net/http
   - [x] Client
-  - Server
-  - Request
-  - Response
+  - [x] Server
 - [] net/rpc
 - [] sync
   - [x] waitGroup
   - [x] once
   - [x] Mutex
 - [x] context
+- [x] database/sql
 - [] array
 - [] slice
 - [] map
 - [] string
 - [] time
-- [] database
 

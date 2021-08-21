@@ -34,10 +34,33 @@ import (
 )
 
 /*
-	什么是多路复用器，什么是 server，什么是 Handler，什么是 handler，什么是 Handle，什么是 HandlerFunc
-	// 处理 http 完成整理
-	1. 注册
-	2. 路径标准化
+	DefaultServeMux:	net/http 提供的默认 Server
+	HandlerFunc:			注册器，向默认 Server 注册一个调用注册函数的 Handler
+	Handle:						注册器，向默认 Server 注册一个 Handler
+	Handler:					接口，包含一个 ServeHTTP 方法， conn 读取请求后会调用  Server 的 ServeHTTP 方法处理请求
+
+	patter 表示用户注册的请求路径
+	path 表示 Request 的请求路径
+	server 处理流程
+		1.注册 pattern 及其对应的 Hanlder
+		2.启动监听器，监听 tcp 端口
+		3.收到连接，校验连接，为每个连接创建一个 goroutine 来处理，不是为每一个请求创建 一个 goroutine
+		4.读取请求，执行 Server的 ServeHTTP 方法来处理请求(意味着 http Server 必须实现 ServeHTTP 方法))
+		5.对于 net/http 包提供的默认多路复用器 DefaultServeMux，流程为
+			- 5.1.找到，调用 Handler 的 ServeHTTP 方法处理请求
+			- 5.2.未找到，判断注册的 patter 中是否存在 path + "/" 的 pattern
+						- 未找打，调用 NOTFOUND Handler 处理请求
+						- 找到，返回 301 的重定向响应给用户，用户重新使用 path + “/” 的 path 发送请求
+
+	1.Handler 是一个 interface，包含一个名为 ServeHTTP 的方法，每个 pattern 有一个注册的对应的 Handler，
+	  Server 收到请求后会调用自身的 ServeHTTP 方法来处理请求
+	2.net/http 包提供了两个函数来注册 Handler
+		- HandlerFunc 函数是一个适配器，将用户注册的函数转换为 HandlerFunc 类型的 Handler，HandlerFunc 类型的 ServeHTTP 会调用自己进行处理，
+		  即，HandlerFunc 函数实际注册的也是一个 Handler
+		- Handle 函数传入要注册的 patter 及其 Handler
+	3.我们可以发现，go 语言的 http Server 实际上会对每一个请求的遵循：1.读取请求，2.执行 ServeHTTP 方法来处理请求，
+	4.net/http 关于 Serve 还提供了关于前缀 和 404 Handler 注册的函数
+	5.流行的 go HTTP 框架，如 gin、httprouter 则是自身实现了一个 Handler，同时维护了 router，在执行 ServeHTTP 时，解析 Request，从 router 中找寻对应的函数来处理请求
 */
 
 // 定义相关错误.
@@ -1649,7 +1672,7 @@ func isCommonNetReadError(err error) bool {
 	return false
 }
 
-// Serve a new connection.
+// 处理当前连接.
 func (c *conn) serve(ctx context.Context) {
 	c.remoteAddr = c.rwc.RemoteAddr().String()
 	ctx = context.WithValue(ctx, LocalAddrContextKey, c.rwc.LocalAddr())
@@ -1666,7 +1689,7 @@ func (c *conn) serve(ctx context.Context) {
 		}
 	}()
 
-	if tlsConn, ok := c.rwc.(*tls.Conn); ok {
+	if tlsConn, ok := c.rwc.(*tls.Conn); ok { // tls 连接
 		if d := c.server.ReadTimeout; d > 0 {
 			c.rwc.SetReadDeadline(time.Now().Add(d))
 		}
@@ -1701,7 +1724,6 @@ func (c *conn) serve(ctx context.Context) {
 	}
 
 	// HTTP/1.x from here on.
-
 	ctx, cancelCtx := context.WithCancel(ctx)
 	c.cancelCtx = cancelCtx
 	defer cancelCtx()
@@ -1778,14 +1800,7 @@ func (c *conn) serve(ctx context.Context) {
 			w.conn.r.startBackgroundRead()
 		}
 
-		// HTTP cannot have multiple simultaneous active requests.[*]
-		// Until the server replies to this request, it can't read another,
-		// so we might as well run the handler in this goroutine.
-		// [*] Not strictly true: HTTP pipelining. We could let them all process
-		// in parallel even if their responses need to be serialized.
-		// But we're not going to implement HTTP pipelining because it
-		// was never deployed in the wild and the answer is HTTP/2.
-		serverHandler{c.server}.ServeHTTP(w, w.req)
+		serverHandler{c.server}.ServeHTTP(w, w.req) // http/1.1 是一个半双工的请求，调用服务的 ServeHTTP 方法处理请求
 		w.cancelCtx()
 		if c.hijacked() {
 			return
@@ -1894,43 +1909,28 @@ func requestBodyRemains(rc io.ReadCloser) bool {
 	}
 }
 
-// The HandlerFunc type is an adapter to allow the use of
-// ordinary functions as HTTP handlers. If f is a function
-// with the appropriate signature, HandlerFunc(f) is a
-// Handler that calls f.
+// HandlerFunc 是一个适配器，运行普通函数作为 HTTP 处理程序
 type HandlerFunc func(ResponseWriter, *Request)
 
-// ServeHTTP calls f(w, r).
 func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request) {
 	f(w, r)
 }
 
-// Helper handlers
-
-// Error replies to the request with the specified error message and HTTP code.
-// It does not otherwise end the request; the caller should ensure no further
-// writes are done to w.
-// The error message should be plain text.
+// 错误响应
 func Error(w ResponseWriter, error string, code int) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(code)
+	w.Header().Set("X-Content-Type-Options", "nosniff") // 提示客户遵循 MIME 设置规定，nosniff 只应用于 "script" 和 "style" 两种类型。事实证明，将其应用于图片类型的文件会导致
+	w.WriteHeader(code)                                 // https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Headers/X-Content-Type-Options
 	fmt.Fprintln(w, error)
 }
 
 // NotFound replies to the request with an HTTP 404 not found error.
 func NotFound(w ResponseWriter, r *Request) { Error(w, "404 page not found", StatusNotFound) }
 
-// NotFoundHandler returns a simple request handler
-// that replies to each request with a ``404 page not found'' reply.
+// 404 Handler
 func NotFoundHandler() Handler { return HandlerFunc(NotFound) }
 
-// StripPrefix returns a handler that serves HTTP requests by removing the
-// given prefix from the request URL's Path (and RawPath if set) and invoking
-// the handler h. StripPrefix handles a request for a path that doesn't begin
-// with prefix by replying with an HTTP 404 not found error. The prefix must
-// match exactly: if the prefix in the request contains escaped characters
-// the reply is also an HTTP 404 not found error.
+// 创建前缀 Handler，只有 path 符合前缀，才调用 Hanlder 进行处理
 func StripPrefix(prefix string, h Handler) Handler {
 	if prefix == "" {
 		return h
@@ -1952,24 +1952,11 @@ func StripPrefix(prefix string, h Handler) Handler {
 	})
 }
 
-// Redirect replies to the request with a redirect to url,
-// which may be a path relative to the request path.
-//
-// The provided code should be in the 3xx range and is usually
-// StatusMovedPermanently, StatusFound or StatusSeeOther.
-//
-// If the Content-Type header has not been set, Redirect sets it
-// to "text/html; charset=utf-8" and writes a small HTML body.
-// Setting the Content-Type header to any value, including nil,
-// disables that behavior.
+// 重定向处理函数
+// server 在匹配 path 的过程中，如果发现 path 形式的 Handler 不存在，path + “/” 形式的 Handler 存在，返回一个 301 状态码的响应，该函数处理重定向请求
 func Redirect(w ResponseWriter, r *Request, url string, code int) {
 	if u, err := urlpkg.Parse(url); err == nil {
-		// If url was relative, make its path absolute by
-		// combining with request path.
-		// The client would probably do this for us,
-		// but doing it ourselves is more reliable.
-		// See RFC 7231, section 7.1.2
-		if u.Scheme == "" && u.Host == "" {
+		if u.Scheme == "" && u.Host == "" { // 拼装 url
 			oldpath := r.URL.Path
 			if oldpath == "" { // should not happen, but avoid a crash if it does
 				oldpath = "/"
@@ -1999,19 +1986,15 @@ func Redirect(w ResponseWriter, r *Request, url string, code int) {
 
 	h := w.Header()
 
-	// RFC 7231 notes that a short HTML body is usually included in
-	// the response because older user agents may not understand 301/307.
-	// Do it only if the request didn't already have a Content-Type header.
 	_, hadCT := h["Content-Type"]
 
-	h.Set("Location", hexEscapeNonASCII(url))
-	if !hadCT && (r.Method == "GET" || r.Method == "HEAD") {
+	h.Set("Location", hexEscapeNonASCII(url))                // 设置重定向地址
+	if !hadCT && (r.Method == "GET" || r.Method == "HEAD") { // RFC 7231，当请求没有 content-type 类型时，返回一个简短的 body
 		h.Set("Content-Type", "text/html; charset=utf-8")
 	}
 	w.WriteHeader(code)
 
-	// Shouldn't send the body for POST or HEAD; that leaves GET.
-	if !hadCT && r.Method == "GET" {
+	if !hadCT && r.Method == "GET" { //
 		body := "<a href=\"" + htmlEscape(url) + "\">" + statusText[code] + "</a>.\n"
 		fmt.Fprintln(w, body)
 	}
@@ -2041,12 +2024,7 @@ func (rh *redirectHandler) ServeHTTP(w ResponseWriter, r *Request) {
 	Redirect(w, r, rh.url, rh.code)
 }
 
-// RedirectHandler returns a request handler that redirects
-// each request it receives to the given url using the given
-// status code.
-//
-// The provided code should be in the 3xx range and is usually
-// StatusMovedPermanently, StatusFound or StatusSeeOther.
+// 返回一个重定向的 Handler，url 为重定向 path， status 为重定向状态码，3xx
 func RedirectHandler(url string, code int) Handler {
 	return &redirectHandler{url, code}
 }
@@ -2110,7 +2088,7 @@ func stripHostPort(h string) string {
 	return host
 }
 
-// 根据 url path 查找 handler
+// 根据 url path 查找 Handler
 func (mux *ServeMux) match(path string) (h Handler, pattern string) {
 	v, ok := mux.m[path] // 是否完全匹配
 	if ok {
@@ -2125,10 +2103,8 @@ func (mux *ServeMux) match(path string) (h Handler, pattern string) {
 	return nil, ""
 }
 
-// redirectToPathSlash determines if the given path needs appending "/" to it.
-// This occurs when a handler for path + "/" was already registered, but
-// not for path itself. If the path needs appending to, it creates a new
-// URL, setting the path to u.Path + "/" and returning true to indicate so.
+// 判断给定的 path 是否需要在末尾添加斜线，判断的条件为 path 不存在，path + “/” 存在
+// 如果需要添加，创建一个新的 url 替换原来的 url
 func (mux *ServeMux) redirectToPathSlash(host, path string, u *url.URL) (*url.URL, bool) {
 	mux.mu.RLock()
 	shouldRedirect := mux.shouldRedirectRLocked(host, path)
@@ -2164,28 +2140,13 @@ func (mux *ServeMux) shouldRedirectRLocked(host, path string) bool {
 	return false
 }
 
-// Handler returns the handler to use for the given request,
-// consulting r.Method, r.Host, and r.URL.Path. It always returns
-// a non-nil handler. If the path is not in its canonical form, the
-// handler will be an internally-generated handler that redirects
-// to the canonical path. If the host contains a port, it is ignored
-// when matching handlers.
-//
-// The path and host are used unchanged for CONNECT requests.
-//
-// Handler also returns the registered pattern that matches the
-// request or, in the case of internally-generated redirects,
-// the pattern that will match after following the redirect.
-//
-// If there is no registered handler that applies to the request,
-// Handler returns a ``page not found'' handler and an empty pattern.
+// Handler 根据请求返回返回注册的 Handler，同时返回与 request 匹配的 pattern，
+// 当为发现对应的 Handler 时，返回一个"page not found" Handler
+// 至此我们可以发现，对于每一个传入的请求，处理逻为根据 request 查找 Handler，然后调用 Handler 的 ServeHTTP 方法来处理请求
 func (mux *ServeMux) Handler(r *Request) (h Handler, pattern string) {
 
 	// CONNECT requests are not canonicalized.
-	if r.Method == "CONNECT" {
-		// If r.URL.Path is /tree and its handler is not registered,
-		// the /tree -> /tree/ redirect applies to CONNECT requests
-		// but the path canonicalization does not.
+	if r.Method == "CONNECT" { // CONNECT 请求没有进行规范化处理
 		if u, ok := mux.redirectToPathSlash(r.URL.Host, r.URL.Path, r.URL); ok {
 			return RedirectHandler(u.String(), StatusMovedPermanently), u.Path
 		}
@@ -2193,18 +2154,15 @@ func (mux *ServeMux) Handler(r *Request) (h Handler, pattern string) {
 		return mux.handler(r.Host, r.URL.Path)
 	}
 
-	// All other requests have any port stripped and path cleaned
-	// before passing to mux.handler.
-	host := stripHostPort(r.Host)
-	path := cleanPath(r.URL.Path)
+	host := stripHostPort(r.Host) // 去掉 port
+	path := cleanPath(r.URL.Path) // 最短 path
 
-	// If the given path is /tree and its handler is not registered,
-	// redirect for /tree/.
+	// 如果请求的path为 /tree，并且 handler 未找到，重定向到 /tree/
 	if u, ok := mux.redirectToPathSlash(host, path, r.URL); ok {
 		return RedirectHandler(u.String(), StatusMovedPermanently), u.Path
 	}
 
-	if path != r.URL.Path {
+	if path != r.URL.Path { // 请求包含查询参数
 		_, pattern = mux.handler(host, path)
 		u := &url.URL{Path: path, RawQuery: r.URL.RawQuery}
 		return RedirectHandler(u.String(), StatusMovedPermanently), pattern
@@ -2213,8 +2171,7 @@ func (mux *ServeMux) Handler(r *Request) (h Handler, pattern string) {
 	return mux.handler(host, r.URL.Path)
 }
 
-// handler is the main implementation of Handler.
-// The path is known to be in canonical form, except for CONNECT methods.
+// 从注册 Handler 中查找匹配 Handler
 func (mux *ServeMux) handler(host, path string) (h Handler, pattern string) {
 	mux.mu.RLock()
 	defer mux.mu.RUnlock()
@@ -2274,7 +2231,7 @@ func (mux *ServeMux) Handle(pattern string, handler Handler) {
 	}
 }
 
-func appendSorted(es []muxEntry, e muxEntry) []muxEntry {
+func appendSorted(es []muxEntry, e muxEntry) []muxEntry { // 按 pattern 长短排序
 	n := len(es)
 	i := sort.Search(n, func(i int) bool {
 		return len(es[i].pattern) < len(e.pattern)
@@ -2295,7 +2252,7 @@ func (mux *ServeMux) HandleFunc(pattern string, handler func(ResponseWriter, *Re
 	}
 	// 此处的 HandlerFunc 用于将 handler 变量转换为 HandlerFunc 类型，
 	// HandlerFunc 实现了 ServeHTTP 方式，因此 handler 也变成 Handler 类型，
-	// HandlerFunc 的 ServeHTTP 方法调用自身，因此调用 handler 的 ServeHTTP 方法时，执行的是自身，即 handler 方法
+	// HandlerFunc 的 ServeHTTP 方法调用自身，因此调用 handler 的 ServeHTTP 方法时，执行的是自身，即传入的 handler 方法
 	mux.Handle(pattern, HandlerFunc(handler))
 }
 
@@ -2527,7 +2484,7 @@ func (c ConnState) String() string {
 	return stateName[c]
 }
 
-type serverHandler struct { // 用于处理 OPTIONS 请求
+type serverHandler struct { // server 处理结构图，conn 会使用运行的 Server 创建一个该实例，然后调用该实例的 ServeHTTP 方法(即传入 Server 的 HTTP 方法)来处理请求
 	srv *Server
 }
 

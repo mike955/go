@@ -26,6 +26,36 @@ import (
 	"time"
 )
 
+/*
+	DefaultClient: 默认的 http Client, 没有设置超时实践，即请求不会因为超时而断开
+	RoundTriper: 一个接口，包含一个名为 RoundTrip 的方法，该方法定义了底层发送机制
+	DefaultTransport: 默认的 transport，该 transport 实现了 RoundTripper 接口，
+
+	发送 http 请求有两种方法：
+		1.直接使用 net/http 包提供的 GET、POST、HEAD、PostForm 方法
+		2.通过 NewRequest 方法创建一个 Request，对请求进行相关设置，创建一个 Client，然后调用 Client 的 Do 方法发送 Request
+
+	请求拼装
+		1.Request 结构式表示一个 Http 请求，有 NewRequest 和 NewRequestWithContext 两个方法可以创建 Request，
+		  Request 包含与 http 请求相关信息，如 Method、Body、Header 等
+		2.NewRequest 使用 Context.Background() 作为 context 来调用 NewRequestWithContext 方法
+		3.如果请求的 body 是一个 io.Closer 类型，则 Request.Body 将被设置为返回 body，同时在 Do 方法调用之后关闭该 body
+
+	发送请求
+		1.创建 Request 和 Client 后，调用 Client 的 Do 方法发送请求
+		2.如果请求返回一个 3xx，将使用 Client 的 CheckRedirect 方法处理返回，默认最多支持 10 次重定向
+		3.Do 方法调用 send 方法发送请求，然后 执行redirectBehavior 方法校验响应是不是重定向响应，如果是执行重定向响应，否则返回结果
+		4.send 方法首先处理 Cookie 工作，然后调用 client 的 transport(RoundTripper) 的 RoundTrip 发送请求，默认使用 DefaultTransport，我们看一下 DefaultTransport 的 RoundTrip 方法流程
+			- 判断请求是否有特定的 transport, 如果有使用特定的 transport 处理请求，否则使用统一流程
+			- 调用 getConn 方法获取连接，先从空闲池获取，没有则创建新连接
+			- 调用连接的 roundTrip 方法处理请求
+				* 向 conn 的 reqch 通道中写入请求，for 循环等待响应
+				* 获取 conn 时创建一个 goroutine，使用 conn 向 Request 写请求，和从 conn 中读取响应，封装 Response
+				* 每个 conn 包含两个 goroutine，分别用于发送和接收数据
+
+	等待响应
+*/
+
 type Client struct { // http client 结构体，默认使用 DefaultClient 对象
 	Transport RoundTripper // 发送 http 请求的实体，处理 http 请求相关细节，默认使用 DefaultTransport
 
@@ -339,8 +369,6 @@ func (c *Client) checkRedirect(req *Request, via []*Request) error {
 	return fn(req, via)
 }
 
-// redirectBehavior describes what should happen when the
-// client encounters a 3xx status code from the server
 // 处理响应状态码为 3xx 的响应
 func redirectBehavior(reqMethod string, resp *Response, ireq *Request) (redirectMethod string, shouldRedirect, includeBody bool) {
 	switch resp.StatusCode {
@@ -394,43 +422,6 @@ func urlErrorOp(method string) string {
 	}
 	return method
 }
-
-// Do sends an HTTP request and returns an HTTP response, following
-// policy (such as redirects, cookies, auth) as configured on the
-// client.
-//
-// An error is returned if caused by client policy (such as
-// CheckRedirect), or failure to speak HTTP (such as a network
-// connectivity problem). A non-2xx status code doesn't cause an
-// error.
-//
-// If the returned error is nil, the Response will contain a non-nil
-// Body which the user is expected to close. If the Body is not both
-// read to EOF and closed, the Client's underlying RoundTripper
-// (typically Transport) may not be able to re-use a persistent TCP
-// connection to the server for a subsequent "keep-alive" request.
-//
-// The request Body, if non-nil, will be closed by the underlying
-// Transport, even on errors.
-//
-// On error, any Response can be ignored. A non-nil Response with a
-// non-nil error only occurs when CheckRedirect fails, and even then
-// the returned Response.Body is already closed.
-//
-// Generally Get, Post, or PostForm will be used instead of Do.
-//
-// If the server replies with a redirect, the Client first uses the
-// CheckRedirect function to determine whether the redirect should be
-// followed. If permitted, a 301, 302, or 303 redirect causes
-// subsequent requests to use HTTP method GET
-// (or HEAD if the original request was HEAD), with no body.
-// A 307 or 308 redirect preserves the original HTTP method and body,
-// provided that the Request.GetBody function is defined.
-// The NewRequest function automatically sets GetBody for common
-// standard library body types.
-//
-// Any returned error will be of type *url.Error. The url.Error
-// value's Timeout method will report true if the request timed out.
 
 // client 暴露的发送请求方法
 func (c *Client) Do(req *Request) (*Response, error) {
