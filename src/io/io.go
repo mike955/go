@@ -50,6 +50,35 @@ import (
 		- Copy				: 分配缓冲区来进行复制
 		- CopyBuffer	: 提供缓冲区来进行复制，而不是分配一个缓冲区
 		- ReadAll			: 从 reader 中读取数据，返回读取的数据及可能发生的错误
+		- MultiWriter	: 创建一个多写 writer 集合，调用其 Write 可以向所有对象写数据
+		- Pipe				: 创建一个同步内存管道，将需要 io.Reader 的对象与需要 io.Writer 对象连接起来，进行读写
+
+	io/fs： 包定义了文件系统的相关接口，文件系统可以是 os 的文件系统，也可以由第三方提供
+
+		接口：
+			- FS:          	文件系统需要的最小实现
+			- File:				 	文件需要的最小实现，用于对单个文件进行访问
+			- DirEntry:			读取目录返回的一个实体
+			- ReadDirFile:	目录文件应该实现这个接口
+			- FileInfo:			文件需要实现的接口，表示文件信息
+			-	StatFS:				FS 接口中添加了 Stat 方法
+			- FS	: 包含 Sub 方法的 FS, 接口，sub 方法 返回以提供的文件为根目录的 FS
+			- SubFS	: 包含 Sub 方法的 FS, 接口，sub 方法 返回以提供的文件为根目录的 FS
+			- SubFS	: 包含 Stat 方法的 FS 接口, stat 方法 获取文件信息
+			- ReadDirFS：包含 ReadDir 方法的 FS 接口, ReadDir 读取目录信息
+			- ReadFileFS: 包含 ReadFile 方法的 FS 接口, ReadFile 读取文件信息
+			- GlobFS: 包含 Glob 方法的 FS 接口, Glob 根据匹配条件查找文件
+		方法:
+			- Stat(fsys FS, name string):					返回通过指定 fsys 查询指定文件信息，如果fsys 实现了 Stat 方法，优先使用实现的方法，否则先打开文件，然后调用打开文件结果的 Stat 方法
+
+	ioutil 包提供了一些 I/O 实用函数, 主要是对其它包的简单封装
+		- ReadAll: 调用 io 包的 ReadAll 方法读取数据
+		- ReadFile: 调用 os 包的 ReadFile 方法读取整个文件内容，成功 error 为 nil， 而不是 EOF
+		- WriteFile: 调用 os 包的 WriteFile 方法将数据写入指定文件，如果文件不存在，根据 perm 参数创建文件
+		- ReadDir: 读取目录指定文件，返回读取的文件名
+			* 1.16+ 开始，os.ReadDir 函数是一个更佳选择，os.ReadDir 返回 fs.DirEntry 类型
+		- NopCloser 调用 io 包的 NopCloser 返回一个无操作 Close 方法的 ReadCloser
+		- TempFile: 调用 os.CreateTemp 在指定目录中创建一个新的临时文件，打开该文件进行读写
 */
 
 // Seek whence values.

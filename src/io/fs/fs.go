@@ -19,10 +19,10 @@ import (
 		- DirEntry:			读取目录返回的一个实体
 		- ReadDirFile:	目录文件应该实现这个接口
 		- FileInfo:			文件需要实现的接口，表示文件信息
-
 		- StatFS:				FS 接口中添加了 Stat 方法
 
 	方法:
+
 		- Stat(fsys FS, name string):					返回通过指定 fsys 查询指定文件信息，如果fsys 实现了 Stat 方法，优先使用实现的方法，否则先打开文件，然后调用打开文件结果的 Stat 方法
 */
 

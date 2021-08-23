@@ -10,6 +10,7 @@
   - [x] Mutex
 - [x] context
 - [x] database/sql
+- [x] io
 - [] array
 - [] slice
 - [] map

@@ -179,21 +179,6 @@ func (w *PipeWriter) CloseWithError(err error) error {
 	return w.p.CloseWrite(err)
 }
 
-// Pipe creates a synchronous in-memory pipe.
-// It can be used to connect code expecting an io.Reader
-// with code expecting an io.Writer.
-//
-// Reads and Writes on the pipe are matched one to one
-// except when multiple Reads are needed to consume a single Write.
-// That is, each Write to the PipeWriter blocks until it has satisfied
-// one or more Reads from the PipeReader that fully consume
-// the written data.
-// The data is copied directly from the Write to the corresponding
-// Read (or Reads); there is no internal buffering.
-//
-// It is safe to call Read and Write in parallel with each other or with Close.
-// Parallel calls to Read and parallel calls to Write are also safe:
-// the individual calls will be gated sequentially.
 func Pipe() (*PipeReader, *PipeWriter) {
 	p := &pipe{
 		wrCh: make(chan []byte),
