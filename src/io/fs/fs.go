@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package fs defines basic interfaces to a file system.
-// A file system can be provided by the host operating system
-// but also by other packages.
 package fs
 
 import (
@@ -13,37 +10,29 @@ import (
 	"unicode/utf8"
 )
 
-// An FS provides access to a hierarchical file system.
-//
-// The FS interface is the minimum implementation required of the file system.
-// A file system may implement additional interfaces,
-// such as ReadFileFS, to provide additional or optimized functionality.
+/*
+	fs 包定义了文件系统的相关接口，文件系统可以是 os 的文件系统，也可以由第三方提供
+
+	接口：
+		- FS:          	文件系统需要的最小实现
+		- File:				 	文件需要的最小实现，用于对单个文件进行访问
+		- DirEntry:			读取目录返回的一个实体
+		- ReadDirFile:	目录文件应该实现这个接口
+		- FileInfo:			文件需要实现的接口，表示文件信息
+
+		- StatFS:				FS 接口中添加了 Stat 方法
+
+	方法:
+		- Stat(fsys FS, name string):					返回通过指定 fsys 查询指定文件信息，如果fsys 实现了 Stat 方法，优先使用实现的方法，否则先打开文件，然后调用打开文件结果的 Stat 方法
+*/
+
+// FS 接口是文件系统需要的最小实现
 type FS interface {
-	// Open opens the named file.
-	//
-	// When Open returns an error, it should be of type *PathError
-	// with the Op field set to "open", the Path field set to name,
-	// and the Err field describing the problem.
-	//
-	// Open should reject attempts to open names that do not satisfy
-	// ValidPath(name), returning a *PathError with Err set to
-	// ErrInvalid or ErrNotExist.
+	// Open 方法打开指定文件
 	Open(name string) (File, error)
 }
 
-// ValidPath reports whether the given path name
-// is valid for use in a call to Open.
-//
-// Path names passed to open are UTF-8-encoded,
-// unrooted, slash-separated sequences of path elements, like “x/y/z”.
-// Path names must not contain an element that is “.” or “..” or the empty string,
-// except for the special case that the root directory is named “.”.
-// Paths must not start or end with a slash: “/x” and “x/” are invalid.
-//
-// Note that paths are slash-separated on all systems, even Windows.
-// Paths containing other characters such as backslash and colon
-// are accepted as valid, but those characters must never be
-// interpreted by an FS implementation as path element separators.
+// ValidPath 严重参数路径名是否有效
 func ValidPath(name string) bool {
 	if !utf8.ValidString(name) {
 		return false
@@ -71,18 +60,12 @@ func ValidPath(name string) bool {
 	}
 }
 
-// A File provides access to a single file.
-// The File interface is the minimum implementation required of the file.
-// Directory files should also implement ReadDirFile.
-// A file may implement io.ReaderAt or io.Seeker as optimizations.
 type File interface {
 	Stat() (FileInfo, error)
 	Read([]byte) (int, error)
 	Close() error
 }
 
-// A DirEntry is an entry read from a directory
-// (using the ReadDir function or a ReadDirFile's ReadDir method).
 type DirEntry interface {
 	// Name returns the name of the file (or subdirectory) described by the entry.
 	// This name is only the final element of the path (the base name), not the entire path.
@@ -105,10 +88,6 @@ type DirEntry interface {
 	Info() (FileInfo, error)
 }
 
-// A ReadDirFile is a directory file whose entries can be read with the ReadDir method.
-// Every directory file should implement this interface.
-// (It is permissible for any file to implement this interface,
-// but if so ReadDir should return an error for non-directories.)
 type ReadDirFile interface {
 	File
 

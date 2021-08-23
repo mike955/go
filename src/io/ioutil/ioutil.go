@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package ioutil implements some I/O utility functions.
-//
-// As of Go 1.16, the same functionality is now provided
-// by package io or package os, and those implementations
-// should be preferred in new code.
-// See the specific function documentation for details.
+Package ioutil implements some I/O utility functions.
+
+As of Go 1.16, the same functionality is now provided
+by package io or package os, and those implementations
+should be preferred in new code.
+See the specific function documentation for details.
 package ioutil
 
 import (
@@ -17,44 +17,33 @@ import (
 	"sort"
 )
 
-// ReadAll reads from r until an error or EOF and returns the data it read.
-// A successful call returns err == nil, not err == EOF. Because ReadAll is
-// defined to read from src until EOF, it does not treat an EOF from Read
-// as an error to be reported.
-//
-// As of Go 1.16, this function simply calls io.ReadAll.
+/*
+	ioutil 包提供了一些 I/O 实用函数, 主要是对其它包的简单封装
+		- ReadAll: 调用 io 包的 ReadAll 方法读取数据
+		- ReadFile: 调用 os 包的 ReadFile 方法读取整个文件内容，成功 error 为 nil， 而不是 EOF
+		- WriteFile: 调用 os 包的 WriteFile 方法将数据写入指定文件，如果文件不存在，根据 perm 参数创建文件
+		- ReadDir: 读取目录指定文件，返回读取的文件名
+			* 1.16+ 开始，os.ReadDir 函数是一个更佳选择，os.ReadDir 返回 fs.DirEntry 类型 
+		- NopCloser 调用 io 包的 NopCloser 返回一个无操作 Close 方法的 ReadCloser
+
+		- TempFile: 调用 os.CreateTemp 在指定目录中创建一个新的临时文件，打开该文件进行读写
+		- MkdirTemp: 调用 os.MkdirTemp 创建一个临时目录
+
+*/
+
+
 func ReadAll(r io.Reader) ([]byte, error) {
 	return io.ReadAll(r)
 }
 
-// ReadFile reads the file named by filename and returns the contents.
-// A successful call returns err == nil, not err == EOF. Because ReadFile
-// reads the whole file, it does not treat an EOF from Read as an error
-// to be reported.
-//
-// As of Go 1.16, this function simply calls os.ReadFile.
 func ReadFile(filename string) ([]byte, error) {
 	return os.ReadFile(filename)
 }
 
-// WriteFile writes data to a file named by filename.
-// If the file does not exist, WriteFile creates it with permissions perm
-// (before umask); otherwise WriteFile truncates it before writing, without changing permissions.
-//
-// As of Go 1.16, this function simply calls os.WriteFile.
 func WriteFile(filename string, data []byte, perm fs.FileMode) error {
 	return os.WriteFile(filename, data, perm)
 }
 
-// ReadDir reads the directory named by dirname and returns
-// a list of fs.FileInfo for the directory's contents,
-// sorted by filename. If an error occurs reading the directory,
-// ReadDir returns no directory entries along with the error.
-//
-// As of Go 1.16, os.ReadDir is a more efficient and correct choice:
-// it returns a list of fs.DirEntry instead of fs.FileInfo,
-// and it returns partial results in the case of an error
-// midway through reading a directory.
 func ReadDir(dirname string) ([]fs.FileInfo, error) {
 	f, err := os.Open(dirname)
 	if err != nil {
@@ -69,16 +58,9 @@ func ReadDir(dirname string) ([]fs.FileInfo, error) {
 	return list, nil
 }
 
-// NopCloser returns a ReadCloser with a no-op Close method wrapping
-// the provided Reader r.
-//
-// As of Go 1.16, this function simply calls io.NopCloser.
+
 func NopCloser(r io.Reader) io.ReadCloser {
 	return io.NopCloser(r)
 }
 
-// Discard is an io.Writer on which all Write calls succeed
-// without doing anything.
-//
-// As of Go 1.16, this value is simply io.Discard.
 var Discard io.Writer = io.Discard
