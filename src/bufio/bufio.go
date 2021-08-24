@@ -2,10 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package bufio implements buffered I/O. It wraps an io.Reader or io.Writer
-// object, creating another object (Reader or Writer) that also implements
-// the interface but provides buffering and some help for textual I/O.
-package bufio
+//
 
 import (
 	"bytes"
@@ -14,6 +11,21 @@ import (
 	"strings"
 	"unicode/utf8"
 )
+
+/*
+	bufio 实现了带缓冲的 I/O, bufio 包装了 io.Reader 和 io.writer 对象，bufio 为文本 I/O 操作提供了缓存等操作
+	方法:
+		- NewReaderSize: 根据参数返回一个具有指定缓冲区大小的 Reader，如果缓冲区大小参数小于 minReadBufferSize, 设置缓冲区大小为 minReadBufferSize
+		- NewReader: 返回一个默认缓冲区大小的 Reader
+		- NewWriterSize: 根据参数返回一个具有指定缓冲区大小的 Writer, 如果缓冲区大小参数小于 minReadBufferSize, 设置缓冲区大小为 minReadBufferSize
+		- NewWriter: 返回一个默认缓冲区大小的 Writer
+		- NewReadWriter: 根据 bufio.Reader 和 bufio.Writer 参数返回一个 ReaderWriter
+	结构体对象:
+		- Reader			：带缓冲的 io.Reader 对象
+		- ReadWriter: : 包含指向 bufio.Reader 和 bufio.Writer 的指针
+		- Scanner:		:
+		- Writer			: 带缓冲的 io.Writer 对象，必须显示调用 Flush 方法发送数据
+*/
 
 const (
 	defaultBufSize = 4096
@@ -26,26 +38,19 @@ var (
 	ErrNegativeCount     = errors.New("bufio: negative count")
 )
 
-// Buffered input.
-
-// Reader implements buffering for an io.Reader object.
 type Reader struct {
 	buf          []byte
-	rd           io.Reader // reader provided by the client
-	r, w         int       // buf read and write positions
+	rd           io.Reader // reader，该字段由可客户端提供
+	r, w         int       // 读写 buf 的位置
 	err          error
-	lastByte     int // last byte read for UnreadByte; -1 means invalid
-	lastRuneSize int // size of last rune read for UnreadRune; -1 means invalid
+	lastByte     int // 未读 buf 的最后一个字段位置
+	lastRuneSize int // 未读字符的最后一个字符大小
 }
 
-const minReadBufferSize = 16
+const minReadBufferSize = 16 // 最小 buf 大小
 const maxConsecutiveEmptyReads = 100
 
-// NewReaderSize returns a new Reader whose buffer has at least the specified
-// size. If the argument io.Reader is already a Reader with large enough
-// size, it returns the underlying Reader.
 func NewReaderSize(rd io.Reader, size int) *Reader {
-	// Is it already a Reader?
 	b, ok := rd.(*Reader)
 	if ok && len(b.buf) >= size {
 		return b
@@ -58,21 +63,17 @@ func NewReaderSize(rd io.Reader, size int) *Reader {
 	return r
 }
 
-// NewReader returns a new Reader whose buffer has the default size.
 func NewReader(rd io.Reader) *Reader {
 	return NewReaderSize(rd, defaultBufSize)
 }
 
-// Size returns the size of the underlying buffer in bytes.
-func (b *Reader) Size() int { return len(b.buf) }
+func (b *Reader) Size() int { return len(b.buf) } // 返回 buf 大小
 
-// Reset discards any buffered data, resets all state, and switches
-// the buffered reader to read from r.
-func (b *Reader) Reset(r io.Reader) {
+func (b *Reader) Reset(r io.Reader) { // 重置 buf，丢弃 buf 中数据
 	b.reset(b.buf, r)
 }
 
-func (b *Reader) reset(buf []byte, r io.Reader) {
+func (b *Reader) reset(buf []byte, r io.Reader) { // 重置 buf
 	*b = Reader{
 		buf:          buf,
 		rd:           r,
@@ -547,14 +548,6 @@ func (b *Reader) writeBuf(w io.Writer) (int64, error) {
 	return int64(n), err
 }
 
-// buffered output
-
-// Writer implements buffering for an io.Writer object.
-// If an error occurs writing to a Writer, no more data will be
-// accepted and all subsequent writes, and Flush, will return the error.
-// After all data has been written, the client should call the
-// Flush method to guarantee all data has been forwarded to
-// the underlying io.Writer.
 type Writer struct {
 	err error
 	buf []byte
@@ -562,9 +555,6 @@ type Writer struct {
 	wr  io.Writer
 }
 
-// NewWriterSize returns a new Writer whose buffer has at least the specified
-// size. If the argument io.Writer is already a Writer with large enough
-// size, it returns the underlying Writer.
 func NewWriterSize(w io.Writer, size int) *Writer {
 	// Is it already a Writer?
 	b, ok := w.(*Writer)
@@ -580,7 +570,6 @@ func NewWriterSize(w io.Writer, size int) *Writer {
 	}
 }
 
-// NewWriter returns a new Writer whose buffer has the default size.
 func NewWriter(w io.Writer) *Writer {
 	return NewWriterSize(w, defaultBufSize)
 }
@@ -770,8 +759,6 @@ func (b *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 
 // buffered input and output
 
-// ReadWriter stores pointers to a Reader and a Writer.
-// It implements io.ReadWriter.
 type ReadWriter struct {
 	*Reader
 	*Writer
