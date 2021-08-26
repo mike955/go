@@ -3,126 +3,83 @@
 // license that can be found in the LICENSE file.
 
 /*
-	Package rpc provides access to the exported methods of an object across a
-	network or other I/O connection.  A server registers an object, making it visible
-	as a service with the name of the type of the object.  After registration, exported
-	methods of the object will be accessible remotely.  A server may register multiple
-	objects (services) of different types but it is an error to register multiple
-	objects of the same type.
+	- rpc 包提供了通过网络和其它 I/O 方式访问导出对象的方法，向 server 注册一个可以被访问的对象，
+	  注册后，该方法可以被远程访问，一个 server 可以注册多个不同类型的对象，但不允许同种类型对向
+	  被注册多次。
+	- 默认的 rpc 使用 gob 协议编解码数据，对于跨语言不够友好，rpc/jsonrpc 提供了 jsonCodec，支持 json 方法编解码
+  - 默认的 rpc.ServeConn 方法只支持单个连接，可以调用 net.Listen 创建一个监听器，每个每个收到的连接，调用 rpc.ServeConn 方法来处理，
+	  这样就可以处理多个连接了
 
-	Only methods that satisfy these criteria will be made available for remote access;
-	other methods will be ignored:
+	同时满足下列标准的方法才能够被访问：
+		- 方法类型被导出
+		- 方法被导出
+		- 方法有两个参数，且都是能被访问(或内置)的类型
+		- 方法的第二个参数是指针
+		- 方法返回包含错误类型
 
-		- the method's type is exported.
-		- the method is exported.
-		- the method has two arguments, both exported (or builtin) types.
-		- the method's second argument is a pointer.
-		- the method has return type error.
+	方法应该是这种形式: func (t *T) MethodName(argType T1, replyType *T2) error
+		- 第一个参数 argType 表示请求参数
+		- 第二个参数 replyType 表示响应结果
+		- 返回结果 error 表示可能发生的错误
 
-	In effect, the method must look schematically like
 
-		func (t *T) MethodName(argType T1, replyType *T2) error
+	结构体:
+		1.Server
+			- HandleHTTP(rpcPath, debugPath string)								: 注册 rpc 路径 Handler，注册 debug 路径 Handler
+			- Register(rcvr interface{})													: 注册 方法
+			- RegisterName(name string, rcvr interface{}) error		: 注册方法和方法名
+			- ServeCodec(codec ServerCodec)												: 配置编解码方式
+			- ServeConn(conn io.ReadWriteCloser)									: 运行传入的连接
+			- ServeHTTP(w http.ResponseWriter, req *http.Request)	: 实现 http Server，处理 http 请求
+			- ServeRequest(codec ServerCodec) error								: 设置请求处理编码方法
+		2.Client
+			- Call(serviceMethod string, args interface{}, reply interface{})									: 同步 rpc 调用，等待返回结果
+			- Close() error																																		: 关闭连接
+			- Go(serviceMethod string, args interface{}, reply interface{}, done chan *Call)	: 异步 rpc 调用，调用结束时，done 通道将收到信号
+		3.ClientCodec
+		4.Call				: 表示一个 RPC 请求
 
-	where T1 and T2 can be marshaled by encoding/gob.
-	These requirements apply even if a different codec is used.
-	(In the future, these requirements may soften for custom codecs.)
+	方法:
+		1.Accept(lis net.Listener) : 监听接收到的监听器，并为每个新收到的连接创建一个 goroutine，goroutine 调用 server.ServeConn 处理连接
+		2.HandleHTTP(): 该方法会调用默认 server 的 HandleHTTP 方法，默认 server 的 HandleHTTP 方法会做两件事:
+				- 调用 http.Handle(rpcPath, server), 向默认 server 注册路径为 /_goRPC_ 的 Handle，由于默认 server 实现了 ServeHTTP 方法，
+				  因此对于路径为 /_goRPC_ 的请求，会调用默认 server 的 ServeHTTP 方法进行处理
+				- 调用 http.Handle(debugPath, debugHTTP{server}), 向默认 server 注册路径为 /debug/rpc 的 Handler，Handler 是 debugHTTP 类型，
+				  会调用 debugHTTP 的 ServeHTTP 方法来处理请求
+		3.Regiter(rcvr interface{})	: 向默认的 server 注册方法
+		4.RegisterName(name string, rcvr interface{}): 向默认 server 注册方法及其名称
+		5.ServeCodec(codec ServerCodec): 配置默认 server 的编解码方式
+		6.ServeConn(conn io,ReadWriteCloser): 在默认 server 上运行单个连接，该方法是一个阻塞的方法，编码方式为 gob
+		7.ServeRequest(codec ServerCodec): 以指定编码方式处理单个请求
 
-	The method's first argument represents the arguments provided by the caller; the
-	second argument represents the result parameters to be returned to the caller.
-	The method's return value, if non-nil, is passed back as a string that the client
-	sees as if created by errors.New.  If an error is returned, the reply parameter
-	will not be sent back to the client.
+	server:
+		8.NewServer()	: 创建一个服务器，默认的 server 也是调用该方法创建的
 
-	The server may handle requests on a single connection by calling ServeConn.  More
-	typically it will create a network listener and call Accept or, for an HTTP
-	listener, HandleHTTP and http.Serve.
+	client:
+		9.Dial(network, address string)									: 向指定地址拨号，创建一个 Client
+		10.DialHTTP(network, address string)						: 连接指定地址的 HTTP RPC 服务器，默认监听 RPC 路径
+		11.DialHTTPPath(network, address, path string)	: 连接指定地址的 HTTP RPC 服务器，监听指定路径
+		12.NewClient(conn io.ReadWriteCloser)						: 根据指定连接创建 Client
+		13.NewClientWithCodec(codec ClientCodec)				: 使用指定编解码器创建 Client
 
-	A client wishing to use the service establishes a connection and then invokes
-	NewClient on the connection.  The convenience function Dial (DialHTTP) performs
-	both steps for a raw network connection (an HTTP connection).  The resulting
-	Client object has two methods, Call and Go, that specify the service and method to
-	call, a pointer containing the arguments, and a pointer to receive the result
-	parameters.
+	一次完整的 rpc 请求过程
+		1.rpc.Dail 创建一个 Client
+			- 创建一个使用默认编解码的 Client
+			- 同时启动一个 goroutine 调用 Client 的 input 方法读取响应
+		2.调用 Client 的 Call 发放发送一个请求
+			- Call 方法调用 Go 方法发送请求
+			- Go 方法调用 send 方法封装请求头，发送请求
+			- 调用 call done 方法等待响应
 
-	The Call method waits for the remote call to complete while the Go method
-	launches the call asynchronously and signals completion using the Call
-	structure's Done channel.
-
-	Unless an explicit codec is set up, package encoding/gob is used to
-	transport the data.
-
-	Here is a simple example.  A server wishes to export an object of type Arith:
-
-		package server
-
-		import "errors"
-
-		type Args struct {
-			A, B int
-		}
-
-		type Quotient struct {
-			Quo, Rem int
-		}
-
-		type Arith int
-
-		func (t *Arith) Multiply(args *Args, reply *int) error {
-			*reply = args.A * args.B
-			return nil
-		}
-
-		func (t *Arith) Divide(args *Args, quo *Quotient) error {
-			if args.B == 0 {
-				return errors.New("divide by zero")
-			}
-			quo.Quo = args.A / args.B
-			quo.Rem = args.A % args.B
-			return nil
-		}
-
-	The server calls (for HTTP service):
-
-		arith := new(Arith)
-		rpc.Register(arith)
-		rpc.HandleHTTP()
-		l, e := net.Listen("tcp", ":1234")
-		if e != nil {
-			log.Fatal("listen error:", e)
-		}
-		go http.Serve(l, nil)
-
-	At this point, clients can see a service "Arith" with methods "Arith.Multiply" and
-	"Arith.Divide".  To invoke one, a client first dials the server:
-
-		client, err := rpc.DialHTTP("tcp", serverAddress + ":1234")
-		if err != nil {
-			log.Fatal("dialing:", err)
-		}
-
-	Then it can make a remote call:
-
-		// Synchronous call
-		args := &server.Args{7,8}
-		var reply int
-		err = client.Call("Arith.Multiply", args, &reply)
-		if err != nil {
-			log.Fatal("arith error:", err)
-		}
-		fmt.Printf("Arith: %d*%d=%d", args.A, args.B, reply)
-
-	or
-
-		// Asynchronous call
-		quotient := new(Quotient)
-		divCall := client.Go("Arith.Divide", args, quotient, nil)
-		replyCall := <-divCall.Done	// will be equal to divCall
-		// check errors, print, etc.
-
-	A server implementation will often provide a simple, type-safe wrapper for the
-	client.
-
-	The net/rpc package is frozen and is not accepting new features.
+	一次完整的 rpc 响应过程
+		1.rpc.RegisterName 注册一个服务，有效的服务方法应该具有 func (t *T) MethodName(argType T1, replyType *T2) error 形式
+		2.创建一个连接
+			- net.Listen
+		3.启动服务
+			- rpc.ServeConn
+		4.接收到请求后（nginx master-slave 模式）
+			- 读取请求，校验方法
+			- 对于有效的请求，创建一个 gorutine 调用 service.call 方法来处理请求
 */
 package rpc
 

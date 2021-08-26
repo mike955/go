@@ -1,16 +1,16 @@
 # The Go Programming Language 源码阅读
 
-- [] net/http
+- [x] net/http
   - [x] Client
   - [x] Server
-- [] net/rpc
+- [x] net/rpc
 - [] sync
   - [x] waitGroup
   - [x] once
   - [x] Mutex
 - [x] context
 - [x] database/sql
-- [ ] bufio
+- [x] bufio
 - [x] io
 - [] array
 - [] slice
