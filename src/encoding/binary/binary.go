@@ -2,24 +2,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package binary implements simple translation between numbers and byte
-// sequences and encoding and decoding of varints.
-//
-// Numbers are translated by reading and writing fixed-size values.
-// A fixed-size value is either a fixed-size arithmetic
-// type (bool, int8, uint8, int16, float32, complex64, ...)
-// or an array or struct containing only fixed-size values.
-//
-// The varint functions encode and decode single integer values using
-// a variable-length encoding; smaller values require fewer bytes.
-// For a specification, see
-// https://developers.google.com/protocol-buffers/docs/encoding.
-//
-// This package favors simplicity over efficiency. Clients that require
-// high-performance serialization, especially for large data structures,
-// should look at more advanced solutions such as the encoding/gob
-// package or protocol buffers.
 package binary
+
+/*
+	binary 包实现了在数字和字节序列之间转换以及 varint 的编解码。
+	binary 通过读取和写入固定大小的值来转换数字，固定大小的值可以是固定大小的算术类型(bool 等)或只包含固定大小值的数组和结构体
+
+	varint 使用可变长编码对单个整数值进行编解码: https://developers.google.com/protocol-buffers/docs/encoding.
+
+	binary 包倾向于简单而不是消息，对于需要高性能序列化的客户，建议使用 encoding/gob 或 protocol buffer
+*/
 
 import (
 	"errors"
@@ -29,58 +21,57 @@ import (
 	"sync"
 )
 
-// A ByteOrder specifies how to convert byte sequences into
-// 16-, 32-, or 64-bit unsigned integers.
+// ByteOrder 接口定义了如果将字节序列转换为 16、32、64 位无符号整数
 type ByteOrder interface {
-	Uint16([]byte) uint16
-	Uint32([]byte) uint32
-	Uint64([]byte) uint64
-	PutUint16([]byte, uint16)
-	PutUint32([]byte, uint32)
-	PutUint64([]byte, uint64)
-	String() string
+	Uint16([]byte) uint16     // 从字节数组读取数据，将数据转换为 uint16 类型
+	Uint32([]byte) uint32     // 从字节数组读取数据，将数据转换为 uint32 类型
+	Uint64([]byte) uint64     // 从字节数组读取数据，将数据转换为 uint64 类型
+	PutUint16([]byte, uint16) // 将 uint16 数字以二进制形式写入 b 字节数组
+	PutUint32([]byte, uint32) // 将 uint32 数字以二进制形式写入 b 字节数组
+	PutUint64([]byte, uint64) // 将 uint64 数字以二进制形式写入 b 字节数组
+	String() string           // 查看编码类型
 }
 
-// LittleEndian is the little-endian implementation of ByteOrder.
+// ByteOrder 的大端实现，大端: 第一个字节是最高位
 var LittleEndian littleEndian
 
-// BigEndian is the big-endian implementation of ByteOrder.
+// ByteOrder 的小端实现, 小端: 第一个字节是最低位
 var BigEndian bigEndian
 
 type littleEndian struct{}
 
-func (littleEndian) Uint16(b []byte) uint16 {
-	_ = b[1] // bounds check hint to compiler; see golang.org/issue/14808
+func (littleEndian) Uint16(b []byte) uint16 { // 从 b 字节数组读取数据，将数据转换为 uint16 类型
+	_ = b[1] // 提示编译器进行边界检查; see golang.org/issue/14808
 	return uint16(b[0]) | uint16(b[1])<<8
 }
 
-func (littleEndian) PutUint16(b []byte, v uint16) {
-	_ = b[1] // early bounds check to guarantee safety of writes below
+func (littleEndian) PutUint16(b []byte, v uint16) { // 将 v 以二进制形式写入 b 字节数组
+	_ = b[1] // 提示编译器进行边界检查，保证写入安全
 	b[0] = byte(v)
 	b[1] = byte(v >> 8)
 }
 
-func (littleEndian) Uint32(b []byte) uint32 {
-	_ = b[3] // bounds check hint to compiler; see golang.org/issue/14808
+func (littleEndian) Uint32(b []byte) uint32 { // 从 b 字节数组读取数据，将数据转换为 uint32 类型
+	_ = b[3]
 	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 }
 
-func (littleEndian) PutUint32(b []byte, v uint32) {
-	_ = b[3] // early bounds check to guarantee safety of writes below
+func (littleEndian) PutUint32(b []byte, v uint32) { // 将 v 以二进制形式写入 b 字节数组
+	_ = b[3]
 	b[0] = byte(v)
 	b[1] = byte(v >> 8)
 	b[2] = byte(v >> 16)
 	b[3] = byte(v >> 24)
 }
 
-func (littleEndian) Uint64(b []byte) uint64 {
-	_ = b[7] // bounds check hint to compiler; see golang.org/issue/14808
+func (littleEndian) Uint64(b []byte) uint64 { // 从 b 字节数组读取数据，将数据转换为 uint64 类型
+	_ = b[7]
 	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
 		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
 }
 
-func (littleEndian) PutUint64(b []byte, v uint64) {
-	_ = b[7] // early bounds check to guarantee safety of writes below
+func (littleEndian) PutUint64(b []byte, v uint64) { // 将 v 以二进制形式写入 b 字节数组
+	_ = b[7]
 	b[0] = byte(v)
 	b[1] = byte(v >> 8)
 	b[2] = byte(v >> 16)
